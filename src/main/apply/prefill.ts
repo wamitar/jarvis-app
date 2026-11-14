@@ -25,7 +25,7 @@ export async function closeBrowser(): Promise<void> { try { await context?.close
 // ---------------------------------------------------------------------------------------------
 // Reading the page
 
-type Kind = 'text' | 'textarea' | 'select' | 'radio' | 'checkbox' | 'checkboxes' | 'dropdown' | 'combobox' | 'file'
+type Kind = 'text' | 'textarea' | 'select' | 'radio' | 'checkbox' | 'checkboxes' | 'dropdown' | 'combobox' | 'file' | 'wddate'
 interface Field {
   idx: number           // data-ih-idx on the control (radio/checkbox groups: on every option)
   kind: Kind
@@ -74,8 +74,9 @@ function collectFields(startIdx: number): Field[] {
     }
     return { text: '', star: false }
   }
+  const placeholderOnly = (t: string): boolean => !t.replace(/\b(select one|select|choose one|choose|search|required|optional)\b/gi, '').replace(/[^\p{L}\p{N}]/gu, '')
   const labelFor = (el: HTMLElement): { text: string; star: boolean } => {
-    const own = ownLabel(el); if (own.text) return own
+    const own = ownLabel(el); if (own.text && !placeholderOnly(own.text)) return own
     const before = textBefore(el, new Set()); if (before.text) return before
     return { text: clean(el.getAttribute('placeholder')) || clean(el.getAttribute('name')) || '', star: false }
   }
@@ -95,8 +96,12 @@ function collectFields(startIdx: number): Field[] {
   const optLabel = (el: HTMLInputElement): string => {
     const o = ownLabel(el).text
     if (o) return o
-    const sib = el.nextElementSibling || el.parentElement?.nextElementSibling
-    return clean(sib?.textContent || el.value)
+    const sib = clean((el.nextElementSibling || el.parentElement?.nextElementSibling)?.textContent)
+    if (sib) return sib
+    const ff = el.closest('[data-automation-id^="formField"]')
+    if (ff && clean(ff.textContent)) return clean(ff.textContent)
+    const v = el.value && el.value !== 'on' ? el.value : ''
+    return v || clean(el.getAttribute('aria-label')) || (el.id || el.name || '').replace(/^.*--/, '').replace(/([a-z])([A-Z])/g, '$1 $2')
   }
   const optVisible = (el: HTMLInputElement): boolean => {
     if (visible(el)) return true
@@ -119,8 +124,12 @@ function collectFields(startIdx: number): Field[] {
       if (!optVisible(input)) continue
       const container = input.closest('fieldset, [role="radiogroup"], [role="group"]')
       let group: HTMLInputElement[] = []
-      if (input.name) group = all.filter(x => (x as HTMLInputElement).type === type && (x as HTMLInputElement).name === input.name && optVisible(x as HTMLInputElement)) as HTMLInputElement[]
+      // Same name = one question, but only inside one container: repeated blocks (Workday's "I currently work here"
+      // in each Work Experience) reuse names and are separate questions.
+      const sameBox = (x: Element): boolean => !container || container.contains(x)
+      if (input.name) group = all.filter(x => (x as HTMLInputElement).type === type && (x as HTMLInputElement).name === input.name && sameBox(x) && optVisible(x as HTMLInputElement)) as HTMLInputElement[]
       if (group.length <= 1 && container) group = Array.from(container.querySelectorAll<HTMLInputElement>(`input[type="${type}"]`)).filter(optVisible)
+      if (type === 'checkbox' && group.length > 1 && new Set(group.map(optLabel)).size === 1) group = [input]
       if (group.length === 0) group = [input]
       const gkey = type + ':' + (input.name || '') + ':' + all.indexOf(group[0])
       if (groupsDone.has(gkey)) continue
@@ -136,7 +145,7 @@ function collectFields(startIdx: number): Field[] {
         push({ kind: 'checkboxes', inputType: type, label: q.text, question: '', section, name: input.name, required: req,
           value: labels.filter((_, k) => group[k].checked).join('; '), options: labels, maxLength: 0, multi: true }, group)
       } else {
-        push({ kind: 'checkbox', inputType: type, label: labels[0], question: q.text !== labels[0] ? q.text : '', section, name: input.name, required: req,
+        push({ kind: 'checkbox', inputType: type, label: labels[0], question: q.text !== labels[0] ? q.text : '', section, name: `${input.name} ${input.id}`.trim(), required: req,
           value: input.checked ? 'checked' : '', options: [], maxLength: 0, multi: false }, group)
       }
       continue
@@ -147,9 +156,23 @@ function collectFields(startIdx: number): Field[] {
         required: input.required, value: '', options: [], maxLength: 0, multi: false }, [el])
       continue
     }
+    // Workday dates: month / day / year boxes that move to the next box as you type. Handled as one field.
+    const auto0 = el.getAttribute('data-automation-id') || ''
+    if (/^dateSection(Month|Day|Year)-input$/.test(auto0)) {
+      const wrap = el.closest('[data-automation-id="dateInputWrapper"]') || el.parentElement?.parentElement?.parentElement
+      const parts = Array.from(wrap?.querySelectorAll<HTMLInputElement>('input[data-automation-id^="dateSection"]') || [])
+      if (parts[0] !== el) continue
+      const fmt = parts.map(x => /Month/.test(x.getAttribute('data-automation-id') || '') ? 'MM' : /Day/.test(x.getAttribute('data-automation-id') || '') ? 'DD' : 'YYYY').join('/')
+      const fs = el.closest('fieldset'); const lg = fs ? clean(fs.querySelector('legend')?.textContent) : ''
+      const l = lg ? { text: lg, star: /[*✱∗]/.test(fs?.querySelector('legend')?.textContent || '') } : textBefore(el, new Set())
+      const vals = parts.map(x => x.value || x.getAttribute('aria-valuenow') || '')
+      push({ kind: 'wddate', inputType: 'date ' + fmt, label: l.text || 'Date', question: '', section, name: auto0,
+        required: l.star || parts.some(x => x.getAttribute('aria-required') === 'true'), value: vals.every(Boolean) ? vals.join('/') : '', options: [], maxLength: 0, multi: false }, [el])
+      continue
+    }
     if (!visible(el) || input.readOnly) continue
     // Hidden stand-ins some forms keep beside custom dropdowns for their own validation (Greenhouse, react-select).
-    if (el.getAttribute('aria-hidden') === 'true' || Number(getComputedStyle(el).opacity) === 0 || (el.tabIndex < 0 && el.getAttribute('role') !== 'combobox')) continue
+    if (el.getAttribute('aria-hidden') === 'true' || Number(getComputedStyle(el).opacity) === 0 || (el.tabIndex < 0 && !['combobox', 'spinbutton'].includes(el.getAttribute('role') || ''))) continue
     const l = labelFor(el)
     const name = `${el.getAttribute('name') || ''} ${el.getAttribute('id') || ''} ${el.getAttribute('autocomplete') || ''} ${el.getAttribute('data-automation-id') || ''}`.trim()
     const required = input.required || el.getAttribute('aria-required') === 'true' || l.star
@@ -158,7 +181,8 @@ function collectFields(startIdx: number): Field[] {
       // A searchable picker. Its chosen value usually shows in a sibling ("pill" or single-value element).
       let shown = ''
       let p: HTMLElement | null = el.parentElement
-      for (let i = 0; i < 5 && p && !shown; i++, p = p.parentElement) {
+      for (let i = 0; i < 8 && p && !shown; i++, p = p.parentElement) {
+        if (p.querySelectorAll('input:not([type=hidden]), textarea, select').length > 1) break   // reached another field
         const picked = Array.from(p.querySelectorAll('[data-automation-id="selectedItem"], [class*="singleValue" i], [class*="multiValue" i], [class*="single-value" i]')).map(x => clean(x.textContent)).filter(Boolean)
         if (picked.length) shown = picked.join('; ')
       }
@@ -175,31 +199,56 @@ function collectFields(startIdx: number): Field[] {
         options: opts.filter(o => o && !/^(select|choose|please select|--)/i.test(o)), maxLength: 0, multi: false }, [el])
       continue
     }
-    push({ kind: el.tagName === 'TEXTAREA' ? 'textarea' : 'text', inputType: type, label: l.text, question: '', section, name, required,
+    // A small group around this box (e.g. "From" around month + year) tells which value it is.
+    let grp = el.closest('fieldset, [role="group"]') as HTMLElement | null
+    if (grp && grp.querySelectorAll('input, select, textarea').length > 3) grp = null
+    const gq = grp ? ((grp.tagName === 'FIELDSET' && clean(grp.querySelector('legend')?.textContent)) || ownLabel(grp).text) : ''
+    push({ kind: el.tagName === 'TEXTAREA' ? 'textarea' : 'text', inputType: type, label: l.text,
+      question: gq && gq !== l.text && gq.length < 200 ? gq : '', section, name, required,
       value: input.value || '', options: [], maxLength: input.maxLength > 0 ? input.maxLength : 0, multi: false }, [el])
   }
   // Workday (and some others) draw dropdowns as buttons that open a list.
   for (const el of Array.from(document.querySelectorAll<HTMLElement>('button[aria-haspopup="listbox"]'))) {
     if (!visible(el) || (el as HTMLButtonElement).disabled) continue
-    const l = labelFor(el)
     const cur = clean(el.textContent)
+    const forLab = el.id ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`) : null
+    const legend = el.closest('fieldset')?.querySelector('legend')
+    const own = ownLabel(el)
+    const l = forLab && clean(forLab.textContent) ? { text: clean(forLab.textContent), star: /[*✱∗]/.test(forLab.textContent || '') }
+      : legend && clean(legend.textContent) ? { text: clean(legend.textContent), star: /[*✱∗]/.test(legend.textContent || '') }
+      : own.text && !own.text.includes(cur) && !placeholderOnly(own.text) ? own : textBefore(el, new Set([el]))
     push({ kind: 'dropdown', inputType: 'dropdown', label: l.text, question: '', section: sectionOf(el), name: el.getAttribute('id') || '',
       required: el.getAttribute('aria-required') === 'true' || l.star, value: /^select one$|^select$|^choose/i.test(cur) ? '' : cur, options: [], maxLength: 0, multi: false }, [el])
   }
   return out
 }
 
+/** Options of an open list. Workday also marks the chips of already-chosen items as options; those are left out. */
+const OPT = '[role="option"]:not([role="listbox"][aria-label*="selected" i] [role="option"]):not([data-automation-id="selectedItem"])'
 const visibleOptions = async (frame: Frame): Promise<string[]> =>
-  frame.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'))
+  frame.evaluate((sel: string) => Array.from(document.querySelectorAll<HTMLElement>(sel))
     .filter(o => { const r = o.getBoundingClientRect(); return r.width > 0 && r.height > 0 })
-    .map(o => (o.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 300)).catch(() => [])
+    .map(o => (o.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 300), OPT).catch(() => [])
 
 /** Opens a custom dropdown or picker just long enough to read its choices. */
+async function closeLists(frame: Frame): Promise<void> {
+  const open = async () => (await frame.locator(OPT + ':visible').count().catch(() => 0)) > 0
+  if (!(await open())) return
+  await frame.page().keyboard.press('Escape').catch(() => {})
+  await frame.page().waitForTimeout(250)
+  if (!(await open())) return
+  // Workday's search lists ignore Escape: move focus away and click an empty spot at the page's edge.
+  await frame.evaluate(() => (document.activeElement as HTMLElement | null)?.blur()).catch(() => {})
+  await frame.page().mouse.click(4, 400).catch(() => {})
+  await frame.page().waitForTimeout(300)
+}
+
 async function readOptions(frame: Frame, f: Field): Promise<void> {
   const loc = frame.locator(`[data-ih-idx="${f.idx}"]`).first()
+  await closeLists(frame)
   try {
     await loc.click({ timeout: 2500 })
-    await frame.locator('[role="option"]').first().waitFor({ state: 'visible', timeout: 1500 }).catch(() => {})
+    await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 1500 }).catch(() => {})
     f.options = await visibleOptions(frame)
   } catch { /* leave options empty; Claude still answers from the label */ }
   await frame.page().keyboard.press('Escape').catch(() => {})
@@ -231,7 +280,8 @@ async function typeInto(loc: Locator, value: string, keystrokes: boolean): Promi
     await loc.fill(value, { timeout: 8000 })
     if ((await loc.inputValue().catch(() => value)) === value) return
   }
-  await loc.click({ timeout: 8000 })
+  // Workday date boxes sit under a display layer that takes the click; focusing directly works there.
+  await loc.click({ timeout: 3000 }).catch(() => loc.focus())
   await loc.press('ControlOrMeta+a')
   await loc.press('Backspace')
   if (value.length <= 400) await loc.pressSequentially(value, { delay: 6 })
@@ -243,43 +293,64 @@ async function clickOption(frame: Frame, want: string): Promise<string | null> {
   const opts = await visibleOptions(frame)
   const i = bestOption(opts, want)
   if (i < 0) return null
-  const loc = frame.locator('[role="option"]').filter({ hasText: opts[i] })
+  const loc = frame.locator(OPT).filter({ hasText: opts[i] })
   const n = await loc.count()
   for (let k = 0; k < n; k++) {
     const o = loc.nth(k)
     if (await o.isVisible().catch(() => false)) {
+      // Already ticked (Workday's search selects a single match on Enter): clicking would untick it.
+      if (await o.locator('[data-automation-checked="Checked"], [data-uxi-multiselectlistitem-isselected="true"]').count().catch(() => 0)) return opts[i]
       // Workday puts a radio/checkbox inside some options; clicking the option row picks it.
-      await o.click({ timeout: 2500 })
-      return opts[i]
+      // A normal click first; if something covers the option (Workday's chosen-items list), send the press
+      // straight to the option element, which Workday accepts, rather than clicking whatever is on top.
+      const ok = await o.click({ timeout: 2000 }).then(() => true).catch(() => false) ||
+        await o.evaluate((el: HTMLElement) => {
+          const t = (el.querySelector('[data-automation-id="promptOption"]') as HTMLElement) || el
+          const r = t.getBoundingClientRect(); const at = { bubbles: true, cancelable: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2, button: 0 }
+          for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) t.dispatchEvent(type.startsWith('pointer') ? new PointerEvent(type, at) : new MouseEvent(type, at))
+          return true
+        }).catch(() => false)
+      if (ok) return opts[i]
     }
   }
   return null
 }
 
-async function pickInCombobox(frame: Frame, loc: Locator, value: string, workday: boolean): Promise<string | null> {
-  await loc.click({ timeout: 2500 })
+/** Empties a picker's search text. Never presses Backspace on an empty box: Workday deletes the last chosen item. */
+async function clearSearch(loc: Locator): Promise<void> {
+  if (!(await loc.inputValue().catch(() => ''))) return
   await loc.press('ControlOrMeta+a').catch(() => {})
+  await loc.press('Backspace').catch(() => {})
+}
+
+async function pickInCombobox(frame: Frame, loc: Locator, value: string, workday: boolean): Promise<string | null> {
+  await closeLists(frame)
+  // With items already chosen, Workday's list of them covers the search box: focus it rather than click through.
+  if ((await frame.locator('[data-automation-id="selectedItem"]').count().catch(() => 0)) > 0) await loc.focus()
+  else await loc.click({ timeout: 2500 }).catch(() => loc.focus())
+  await clearSearch(loc)
   await loc.pressSequentially(value, { delay: 25 })
   // Workday searches on Enter. Anywhere else Enter can submit the form, so it is never pressed there.
   if (workday) await loc.press('Enter').catch(() => {})
-  await frame.locator('[role="option"]').first().waitFor({ state: 'visible', timeout: 3000 }).catch(() => {})
-  await frame.page().waitForTimeout(300)
+  await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 4000 }).catch(() => {})
+  await frame.page().waitForTimeout(workday ? 900 : 300)
   let picked = await clickOption(frame, value)
   if (!picked) {
     // Search text did not match an option: clear it and pick from the full list instead.
-    await loc.press('ControlOrMeta+a').catch(() => {}); await loc.press('Backspace').catch(() => {})
+    await clearSearch(loc)
     await frame.page().keyboard.press('Escape').catch(() => {})
     await loc.evaluate((e: HTMLElement) => e.blur()).catch(() => {})
-    await loc.click({ timeout: 2500 }).catch(() => {})   // reopen the full list
-    await frame.locator('[role="option"]').first().waitFor({ state: 'visible', timeout: 2000 }).catch(() => {})
+    await loc.focus().catch(() => {}); await loc.press('ArrowDown').catch(() => {})   // reopen the full list
+    await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 2000 }).catch(() => {})
     picked = await clickOption(frame, value)
   }
   if (picked) {
     // Two-level lists (Workday "How did you hear about us?"): a category opens a sub-list.
     await frame.page().waitForTimeout(500)
     const sub = await visibleOptions(frame)
-    if (sub.length && !sub.includes(picked)) { const second = await clickOption(frame, value) || (sub.length ? (await frame.locator('[role="option"]:visible').first().click().then(() => sub[0]).catch(() => null)) : null); if (second) picked += ' › ' + second }
+    if (sub.length && !sub.includes(picked)) { const second = await clickOption(frame, value) || (sub.length ? (await frame.locator(OPT + ':visible').first().click().then(() => sub[0]).catch(() => null)) : null); if (second) picked += ' › ' + second }
   }
+  if (!picked) await clearSearch(loc)
   await frame.page().keyboard.press('Escape').catch(() => {})
   return picked
 }
@@ -316,7 +387,7 @@ const RULES: Rule[] = [
   [/province|\bstate\b/i, p => p.province],
   [/country/i, p => p.country]
 ]
-const NEVER = /password|captcha|social (security|insurance)|\bssn\b|\bsin\b|passport|driver'?s? licen[cs]e number|bank|credit card/i
+const NEVER = /robots only|for robots|honeypot|leave (this|it) (field )?(blank|empty)|do not (fill|enter|complete)|password|captcha|social (security|insurance)|\bssn\b|\bsin\b|passport|driver'?s? licen[cs]e number|bank|credit card/i
 
 function ruleAnswer(f: Field, profile: Profile, job: Job): string {
   const text = `${f.question} ${f.label}`
@@ -331,7 +402,7 @@ async function decide(fields: Field[], job: Job, profile: Profile, resume: Resum
   const list = fields.map(f => ({
     id: f.idx, type: f.kind === 'combobox' ? (f.multi ? 'searchable multi-select' : 'searchable dropdown') : f.kind === 'dropdown' ? 'dropdown' : f.kind,
     ...(f.inputType && !['text', 'textarea', 'select', 'radio', 'checkbox', 'dropdown', 'combobox'].includes(f.inputType) ? { inputType: f.inputType } : {}),
-    label: f.label.slice(0, 300), ...(f.question ? { question: f.question.slice(0, 300) } : {}), ...(f.section ? { section: f.section } : {}),
+    label: f.label.slice(0, 300), ...(f.label.length < 4 && f.name ? { fieldName: f.name.slice(0, 80) } : {}), ...(f.question ? { question: f.question.slice(0, 300) } : {}), ...(f.section ? { section: f.section } : {}),
     required: f.required, ...(f.options.length ? { options: f.options.slice(0, 250) } : {}), ...(f.maxLength ? { maxLength: f.maxLength } : {})
   }))
   const { extra, ...facts } = profile
@@ -362,13 +433,18 @@ How to answer:
 - For a searchable field without options, reply with the text to search for (e.g. a school name, a skill, a country).
 - Work authorization, sponsorship and citizenship come from candidate_facts. Answer them directly, including export-control or "U.S. person" (ITAR/EAR) questions: a U.S. citizen is a U.S. person.
 - Gender, race, ethnicity, veteran, disability, sexual orientation and similar self-identification questions: choose the option that declines to answer ("I don't wish to answer", "Decline to self-identify", "I do not want to answer").
-- Tick consent, acknowledgement, privacy, "I certify" and terms boxes. Do not tick marketing or newsletter boxes, and answer No to consenting to text (SMS) messages.
+- Be lenient: tick or say Yes to consent, acknowledgement, privacy, "I certify", terms, text (SMS) message, recruiting-communication and job-alert questions. When unsure whether to agree to something, agree.
+- Preferred method of contact: Email.
+- AI screening, AI interviews or automated/AI evaluation of the application: answer No (opt out) whenever the form offers the choice.
 - "Have you worked for / been employed by this company before?", "Are you related to an employee?", non-compete or "Have you been convicted" style questions: answer No unless the facts say otherwise.
 - "How did you hear about us?": pick the option closest to the company's careers website or a job board.
+- "Highest level of education completed": the candidate has NOT finished a degree yet; pick high school / secondary (or the closest "some college / currently enrolled" option). A question about the degree being pursued gets the bachelor's degree.
 - Age questions ("Are you 18 or older?"): Yes, the candidate is a university student.
 - Willing to relocate / travel / work on site: Yes for this internship unless the facts say otherwise.
 - Phone country code or phone country: the country that matches the candidate's phone number. Phone device type: Mobile.
 - Address fields: use the address in the facts; country is the candidate's country.
+- Fields with type "wddate" are dates: reply in exactly the format in inputType (e.g. "09/2025" for "date MM/YYYY", "11/14/2026" for "date MM/DD/YYYY", "2025" for "date YYYY"). "From"/"To" in a Work Experience or Education section are that entry's start/end dates from the resume; if the resume only gives a year, use 09 for a fall start, 05 for a summer start, 01 otherwise. For a current role or a degree in progress, give the expected end date only if one is known, otherwise "". Whenever you leave a To date blank for a current role, also tick that entry's "I currently work here" box (same section).
+- Searchable multi-select of skills: reply with an array of up to 8 skills from the resume.
 - Dates: match the format the label or inputType implies (MM, YYYY, MM/YYYY, YYYY-MM-DD). A "date" for a signature or self-identification form is today. Start date is the candidate's availability.
 - Fields in sections like "Work Experience 1", "Work Experience 2", "Education 1" map to the resume entries in the order they appear on the resume. "Role Description" or similar: 2 to 4 plain sentences from that entry's bullets.
 - Salary or compensation: if the job states a pay range, give its minimum; otherwise reply "Open to discussion" for text fields.
@@ -407,6 +483,17 @@ async function collectAll(p: Page): Promise<Located[]> {
   return out
 }
 
+/** Ticks a box and confirms it stuck; styled boxes often ignore a direct check, so the label or the box is clicked instead. */
+async function tick(frame: Frame, box: Locator): Promise<void> {
+  if (await box.isChecked().catch(() => false)) return
+  await box.check({ force: true, timeout: 2500 }).catch(() => {})
+  if (await box.isChecked().catch(() => false)) return
+  const id = await box.getAttribute('id').catch(() => null)
+  const label = id ? frame.locator(`label[for="${id}"]`).first() : null
+  if (label && (await label.isVisible().catch(() => false))) await label.click({ timeout: 2500 }).catch(() => {})
+  if (!(await box.isChecked().catch(() => false))) await box.click({ force: true, timeout: 2500 }).catch(() => {})
+}
+
 async function applyAnswer(x: Located, value: Answer['value'], workday: boolean, res: PrefillResult): Promise<void> {
   const { frame, f } = x
   const loc = frame.locator(`[data-ih-idx="${f.idx}"]`)
@@ -420,6 +507,18 @@ async function applyAnswer(x: Located, value: Answer['value'], workday: boolean,
       if (f.kind === 'textarea' || v.length > 80) res.drafted.push({ question: (f.question || f.label).slice(0, 120), answer: v })
       else res.filled.push(`${label}: ${v}`)
       return
+    }
+    case 'wddate': {
+      const fmt = f.inputType.replace(/^date /, '').split('/')
+      const got = text.split(/[^0-9]+/).filter(Boolean)
+      if (got.length !== fmt.length) { res.skipped.push(`${label} (date "${text}" does not fit ${fmt.join('/')})`); return }
+      const digits = got.map((g, k) => fmt[k] === 'YYYY' ? g.padStart(4, '20') : g.padStart(2, '0')).join('')
+      const first = loc.first()
+      await first.locator('xpath=preceding-sibling::*[1]').click({ timeout: 2000 }).catch(() => first.focus())
+      await first.focus().catch(() => {})
+      await frame.page().keyboard.type(digits, { delay: 70 })
+      await first.evaluate((e: HTMLElement) => e.blur()).catch(() => {})
+      res.filled.push(`${label}: ${got.join('/')}`); return
     }
     case 'select': {
       const i = bestOption(f.options, text)
@@ -440,11 +539,7 @@ async function applyAnswer(x: Located, value: Answer['value'], workday: boolean,
     case 'checkbox': {
       const want = value === true || /^(true|yes|checked|tick)$/i.test(text)
       if (!want) return
-      const box = loc.first()
-      await box.check({ force: true, timeout: 2500 }).catch(async () => {
-        const id = await box.getAttribute('id')
-        if (id) await frame.locator(`label[for="${id}"]`).first().click(); else await box.click({ force: true })
-      })
+      await tick(frame, loc.first())
       res.filled.push(`Ticked: ${label}`); return
     }
     case 'checkboxes': {
@@ -453,7 +548,7 @@ async function applyAnswer(x: Located, value: Answer['value'], workday: boolean,
       for (const w of wants) {
         const i = bestOption(f.options, w); if (i < 0) continue
         const opt = frame.locator(`[data-ih-idx="${f.idx}"][data-ih-opt="${i}"]`).first()
-        await opt.check({ force: true, timeout: 2500 }).catch(() => opt.click({ force: true }))
+        await tick(frame, opt)
         ticked.push(f.options[i])
       }
       if (ticked.length) res.filled.push(`${label}: ${ticked.join(', ')}`); else if (f.required) res.skipped.push(`${label} (no choice matched)`)
@@ -461,8 +556,9 @@ async function applyAnswer(x: Located, value: Answer['value'], workday: boolean,
     }
     case 'dropdown': {
       if (!text.trim()) return
+      await closeLists(frame)
       await loc.first().click({ timeout: 2500 })
-      await frame.locator('[role="option"]').first().waitFor({ state: 'visible', timeout: 2500 }).catch(() => {})
+      await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 2500 }).catch(() => {})
       const picked = await clickOption(frame, text)
       if (picked) res.filled.push(`${label}: ${picked}`)
       else { await frame.page().keyboard.press('Escape').catch(() => {}); res.skipped.push(`${label} (dropdown: "${text.slice(0, 40)}" is not one of the choices)`) }
@@ -499,14 +595,15 @@ async function attachFiles(fields: Located[], tailored: Tailored | null, res: Pr
 
 /** Workday "My Experience": add empty Work Experience / Education blocks when the page has none. */
 async function addWorkdayBlocks(p: Page, fields: Located[], resume: Resume, res: PrefillResult): Promise<boolean> {
-  const has = (re: RegExp, lab: RegExp): boolean => fields.some(x => re.test(x.f.section) && lab.test(x.f.label))
+  const have = (re: RegExp, lab: RegExp): number => fields.filter(x => re.test(x.f.section) && lab.test(x.f.label)).length
   const plan: [RegExp, RegExp, number, string][] = [
     [/work experience/i, /job title/i, Math.min(resume.experience.length, 4), 'Work Experience'],
     [/education/i, /school|university/i, Math.min(resume.education.length, 2), 'Education']
   ]
   let added = false
   for (const [section, lab, count, name] of plan) {
-    if (!count || has(section, lab)) continue
+    const existing = have(section, lab)
+    if (count <= existing) continue
     const btn = p.locator(`[role="group"][aria-labelledby*="${name.replace(' ', '-')}" i] button, button[aria-label^="Add ${name}" i], button[aria-label^="Add Another ${name}" i]`)
       .filter({ hasText: /^\s*Add/ }).first()
     let target = btn
@@ -514,7 +611,8 @@ async function addWorkdayBlocks(p: Page, fields: Located[], resume: Resume, res:
       // Fall back to the "Add" button that follows the section's heading.
       target = p.locator(`xpath=//*[self::h2 or self::h3 or self::h4][contains(normalize-space(.), "${name}")]/following::button[normalize-space(.)="Add" or normalize-space(.)="Add Another"][1]`).first()
     }
-    for (let k = 0; k < count; k++) {
+    if (existing) target = p.locator(`xpath=//*[self::h2 or self::h3 or self::h4][contains(normalize-space(.), "${name}")]/following::button[normalize-space(.)="Add Another"][1]`).first()
+    for (let k = existing; k < count; k++) {
       if (!(await target.isVisible().catch(() => false))) break
       await target.click().catch(() => {})
       await p.waitForTimeout(700)
@@ -541,13 +639,13 @@ async function guardSubmit(p: Page, on: boolean): Promise<void> {
   }
 }
 
-async function fillCurrentPage(p: Page, job: Job, profile: Profile, resume: Resume, tailored: Tailored | null, model: string, label = 'Application page'): Promise<PrefillResult> {
+async function fillCurrentPage(p: Page, job: Job, profile: Profile, resume: Resume, tailored: Tailored | null, model: string, label = 'Application page', redo = false): Promise<PrefillResult> {
   await guardSubmit(p, true)
-  try { return await fillPage(p, job, profile, resume, tailored, model, label) }
+  try { return await fillPage(p, job, profile, resume, tailored, model, label, redo) }
   finally { await guardSubmit(p, false) }
 }
 
-async function fillPage(p: Page, job: Job, profile: Profile, resume: Resume, tailored: Tailored | null, model: string, label: string): Promise<PrefillResult> {
+async function fillPage(p: Page, job: Job, profile: Profile, resume: Resume, tailored: Tailored | null, model: string, label: string, redo: boolean): Promise<PrefillResult> {
   const res = blank(label)
   const workday = isWorkdayUrl(p.url())
   const attempted = new Set<string>()
@@ -558,7 +656,10 @@ async function fillPage(p: Page, job: Job, profile: Profile, resume: Resume, tai
 
   // Two passes: answering a question can reveal follow-up questions.
   for (let pass = 0; pass < 2; pass++) {
-    const todo = fields.filter(x => isEmpty(x.f) && !attempted.has(x.key) && !NEVER.test(`${x.f.label} ${x.f.question} ${x.f.name}`))
+    const words = /[a-z]{3,}\s+[a-z]{2,}/i
+    const meaningless = (f: Field): boolean => (f.kind === 'checkbox' && !f.question && !words.test(f.label)) ||
+      (f.kind === 'checkboxes' && !words.test(f.label) && !f.options.some(o => words.test(o)))
+    const todo = fields.filter(x => !meaningless(x.f) && (isEmpty(x.f) || (redo && pass === 0 && !['file', 'combobox'].includes(x.f.kind) && !(x.f.kind === 'dropdown' && !x.f.label))) && !attempted.has(x.key) && !NEVER.test(`${x.f.label} ${x.f.question} ${x.f.name}`))
     if (!todo.length) break
     for (const x of todo) if ((x.f.kind === 'dropdown' || x.f.kind === 'combobox') && !x.f.options.length) await readOptions(x.frame, x.f)
     let answers: Map<number, Answer['value']>
@@ -648,6 +749,15 @@ async function authStep(p: Page, tenant: string, hooks: WorkdayHooks): Promise<P
     return res
   }
   let creating = await seen(p, wd('verifyPassword'))
+  // Workday often opens on "Create Account" even when the account exists: switch to Sign In for employers seen before.
+  if (creating && (hooks.isKnown(tenant) || triedCreate.has(tenant))) {
+    const link = p.locator(`${wd('signInLink')}, button:has-text("Sign In"):below(${wd('createAccountSubmitButton')})`).first()
+    if (await link.isVisible().catch(() => false)) {
+      await link.click()
+      await p.locator(wd('verifyPassword')).first().waitFor({ state: 'hidden', timeout: 6000 }).catch(() => {})
+      creating = await seen(p, wd('verifyPassword'))
+    }
+  }
   if (!creating && !hooks.isKnown(tenant) && !triedCreate.has(tenant) && (await seen(p, wd('createAccountLink')))) {
     triedCreate.add(tenant)
     await p.locator(wd('createAccountLink')).first().click()
@@ -680,6 +790,12 @@ async function authStep(p: Page, tenant: string, hooks: WorkdayHooks): Promise<P
 async function workdayStep(p: Page, args: Args, hooks: WorkdayHooks): Promise<PrefillResult> {
   const [job, profile, resume, tailored, model] = args
   const tenant = hostOf(p.url()).split('.')[0]
+  // Workday's own "Something went wrong, please refresh" page: refresh once and let the watcher carry on.
+  if (await p.getByText(/^Something went wrong$/).first().isVisible().catch(() => false)) {
+    await p.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
+    await p.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {})
+    return blank('Workday', 'Workday showed an error page, so the app refreshed it.')
+  }
   if ((await p.locator('input[type="password"]:visible').count().catch(() => 0)) > 0) return authStep(p, tenant, hooks)
   if ((await seen(p, wd('applyManually'))) || (await seen(p, wd('autofillWithResume')))) {
     const res = blank('Workday: how to apply'); await chooseStart(p, tailored, res); return res
@@ -746,4 +862,4 @@ export async function fillAgain(args: Args, hooks: WorkdayHooks): Promise<Prefil
 }
 
 /** For tests: fill whatever page is open, without the Workday walk. */
-export const _test = { collectAll, fillCurrentPage, bestOption }
+export const _test = { collectAll, fillCurrentPage, bestOption, workdayStep, pickInCombobox, visibleOptions }
