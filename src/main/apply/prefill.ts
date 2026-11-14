@@ -228,7 +228,7 @@ const OPT = '[role="option"]:not([role="listbox"][aria-label*="selected" i] [rol
 const visibleOptions = async (frame: Frame): Promise<string[]> =>
   frame.evaluate((sel: string) => Array.from(document.querySelectorAll<HTMLElement>(sel))
     .filter(o => { const r = o.getBoundingClientRect(); return r.width > 0 && r.height > 0 })
-    .map(o => (o.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 300), OPT).catch(() => [])
+    .map(o => (o.textContent || '').replace(/\s+/g, ' ').trim()).filter(t => t && !/^(select one|select|choose one|--+)$/i.test(t)).slice(0, 300), OPT).catch(() => [])
 
 /** Opens a custom dropdown or picker just long enough to read its choices. */
 async function closeLists(frame: Frame): Promise<void> {
@@ -555,7 +555,7 @@ async function applyAnswer(x: Located, value: Answer['value'], workday: boolean,
       return
     }
     case 'dropdown': {
-      if (!text.trim()) return
+      if (!text.trim() || /^(select one|select|choose one)$/i.test(text.trim())) return
       await closeLists(frame)
       await loc.first().click({ timeout: 2500 })
       await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 2500 }).catch(() => {})
@@ -741,6 +741,36 @@ async function chooseStart(p: Page, tailored: Tailored | null, res: PrefillResul
   res.filled.push(useResume ? 'Chose "Autofill with Resume"' : 'Chose "Apply Manually"')
 }
 
+const pwVisible = (p: Page): Promise<boolean> => p.locator('input[type="password"]:visible').first().isVisible().catch(() => false)
+const wdError = async (p: Page): Promise<string> =>
+  (await p.locator(`${wd('errorMessage')}, ${wd('inputAlert')}, [role="alert"]`).allInnerTexts().catch(() => [] as string[])).map(t => t.replace(/\s+/g, ' ').trim()).filter(Boolean).join(' ').slice(0, 200)
+
+/** Switches Workday's account page from "Create Account" to "Sign In". */
+async function toSignIn(p: Page): Promise<void> {
+  const link = p.locator(`${wd('signInLink')}, button:has-text("Sign In"):below(${wd('createAccountSubmitButton')})`).first()
+  if (!(await link.isVisible().catch(() => false))) return
+  await link.click().catch(() => {})
+  await p.locator(wd('verifyPassword')).first().waitFor({ state: 'hidden', timeout: 6000 }).catch(() => {})
+  await p.locator(wd('signInSubmitButton')).first().waitFor({ state: 'visible', timeout: 6000 }).catch(() => {})
+  await p.waitForTimeout(500)   // the form re-renders after switching; typing too early is lost
+}
+
+/** Types the login and presses Sign In, then waits to see the password box go. Tries twice. */
+async function signIn(p: Page, login: { email: string; password: string }, res: PrefillResult): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await typeInto(p.locator(wd('email')).first(), login.email, true)
+    await typeInto(p.locator(wd('password')).first(), login.password, true)
+    await pressWd(p, 'signInSubmitButton')
+    res.filled.push(attempt ? 'Pressed Sign In again' : 'Signed in with your saved login')
+    const gone = await p.locator('input[type="password"]:visible').first().waitFor({ state: 'hidden', timeout: 15_000 }).then(() => true).catch(() => false)
+    if (gone) return true
+    const err = await wdError(p)
+    if (/password|incorrect|invalid|locked|verif|code/i.test(err)) { res.note = `Workday says: "${err}". Finish signing in yourself in the browser; the app carries on once you are in.`; return false }
+  }
+  res.note = 'Workday did not get past sign-in. Sign in yourself in the browser; the app carries on once you are in.'
+  return false
+}
+
 async function authStep(p: Page, tenant: string, hooks: WorkdayHooks): Promise<PrefillResult> {
   const res = blank('Workday sign-in')
   const login = await hooks.getLogin()
@@ -749,41 +779,38 @@ async function authStep(p: Page, tenant: string, hooks: WorkdayHooks): Promise<P
     return res
   }
   let creating = await seen(p, wd('verifyPassword'))
-  // Workday often opens on "Create Account" even when the account exists: switch to Sign In for employers seen before.
-  if (creating && (hooks.isKnown(tenant) || triedCreate.has(tenant))) {
-    const link = p.locator(`${wd('signInLink')}, button:has-text("Sign In"):below(${wd('createAccountSubmitButton')})`).first()
-    if (await link.isVisible().catch(() => false)) {
-      await link.click()
-      await p.locator(wd('verifyPassword')).first().waitFor({ state: 'hidden', timeout: 6000 }).catch(() => {})
-      creating = await seen(p, wd('verifyPassword'))
-    }
-  }
+  // Workday often opens on "Create Account" even when the account exists: sign in for employers seen before.
+  if (creating && (hooks.isKnown(tenant) || triedCreate.has(tenant))) { await toSignIn(p); creating = await seen(p, wd('verifyPassword')) }
   if (!creating && !hooks.isKnown(tenant) && !triedCreate.has(tenant) && (await seen(p, wd('createAccountLink')))) {
     triedCreate.add(tenant)
     await p.locator(wd('createAccountLink')).first().click()
     creating = await seen(p, wd('verifyPassword'), 6000)
   }
+  if (!creating) {
+    if (await signIn(p, login, res)) { hooks.markKnown(tenant); res.note = 'Signed in. The next pages are filled as they appear.' }
+    return res
+  }
+  triedCreate.add(tenant)
+  res.page = 'Workday create account'
   await typeInto(p.locator(wd('email')).first(), login.email, true)
   await typeInto(p.locator(wd('password')).first(), login.password, true)
-  if (creating) {
-    triedCreate.add(tenant)
-    await typeInto(p.locator(wd('verifyPassword')).first(), login.password, true)
-    res.page = 'Workday create account'
-    res.filled.push('Email', 'Password', 'Confirm password')
-    if (hooks.autoCreate) {
-      const box = p.locator(wd('createAccountCheckbox')).first()
-      if (await box.isVisible().catch(() => false)) { await box.check({ force: true }).catch(() => box.click()); res.filled.push('Agreement box ticked') }
-      await pressWd(p, 'createAccountSubmitButton')
-      res.filled.push('Pressed Create Account')
-      res.note = 'If Workday emails you a verification link, open it and come back. If it says an account already exists, press Sign In on that page and the app signs you in.'
-    } else {
-      res.note = 'Tick the agreement box if there is one, then press Create Account. The app carries on once you are in. To have it press Create Account too, turn that on in Settings › Workday account.'
-    }
-  } else {
-    await pressWd(p, 'signInSubmitButton')
-    res.filled.push('Email', 'Password', 'Pressed Sign In')
-    res.note = 'Signing in. If Workday rejects the password or asks for a code, finish that step in the browser.'
+  await typeInto(p.locator(wd('verifyPassword')).first(), login.password, true)
+  res.filled.push('Email', 'Password', 'Confirm password')
+  if (!hooks.autoCreate) {
+    res.note = 'Tick the agreement box if there is one, then press Create Account. The app carries on once you are in. To have it press Create Account too, turn that on in Settings › Workday account.'
+    return res
   }
+  const box = p.locator(wd('createAccountCheckbox')).first()
+  if (await box.isVisible().catch(() => false)) { await box.check({ force: true }).catch(() => box.click()); res.filled.push('Agreement box ticked') }
+  await pressWd(p, 'createAccountSubmitButton')
+  res.filled.push('Pressed Create Account')
+  const gone = await p.locator('input[type="password"]:visible').first().waitFor({ state: 'hidden', timeout: 15_000 }).then(() => true).catch(() => false)
+  if (gone) { hooks.markKnown(tenant); res.note = 'Pressed Create Account. If Workday emails you a verification link, open it and come back. If the account already existed, the app signs in on the next page.'; return res }
+  // The account already exists (Workday says so, or simply stays here): sign in instead.
+  const err = await wdError(p)
+  hooks.markKnown(tenant)
+  await toSignIn(p)
+  if (await signIn(p, login, res)) res.note = `${err ? `Workday said "${err}", so the app signed in instead. ` : 'An account already existed, so the app signed in. '}The next pages are filled as they appear.`
   return res
 }
 
@@ -820,11 +847,18 @@ async function workdayStep(p: Page, args: Args, hooks: WorkdayHooks): Promise<Pr
 async function watchWorkday(p: Page, args: Args, hooks: WorkdayHooks): Promise<void> {
   const token = ++watchToken
   const done = new Set<string>()
+  const authTries = new Map<string, number>()
   const until = Date.now() + 45 * 60_000
   while (token === watchToken && !p.isClosed() && Date.now() < until) {
     try {
       const sig = isWorkdayUrl(p.url()) ? await signature(p) : ''
+      // A sign-in page that is still showing after a try gets another go (up to three), so one slow login never stalls the run.
+      if (sig && done.has(sig) && /\|pw[1-9]/.test(sig) && (authTries.get(sig) || 0) < 3) {
+        await p.waitForTimeout(6000)
+        if ((await signature(p)) === sig && (await pwVisible(p))) done.delete(sig)
+      }
       if (sig && !done.has(sig)) {
+        if (/\|pw[1-9]/.test(sig)) authTries.set(sig, (authTries.get(sig) || 0) + 1)
         await p.waitForTimeout(1300)
         if ((await signature(p)) !== sig) continue   // still loading or changing
         done.add(sig)
@@ -862,4 +896,4 @@ export async function fillAgain(args: Args, hooks: WorkdayHooks): Promise<Prefil
 }
 
 /** For tests: fill whatever page is open, without the Workday walk. */
-export const _test = { collectAll, fillCurrentPage, bestOption, workdayStep, pickInCombobox, visibleOptions }
+export const _test = { prefill, closeBrowser,  collectAll, fillCurrentPage, bestOption, workdayStep, pickInCombobox, visibleOptions }
