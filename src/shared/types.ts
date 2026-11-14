@@ -49,10 +49,10 @@ export interface Resume {
 
 export interface Profile {
   firstName: string; lastName: string; email: string; phone: string
-  city: string; province: string; country: string
+  address: string; city: string; province: string; postalCode: string; country: string
   linkedin: string; website: string; github: string
   school: string; degree: string; major: string; gpa: string; graduation: string
-  workAuthCanada: string; workAuthUsa: string; needsSponsorship: string
+  citizenship: string; workAuthCanada: string; workAuthUsa: string; needsSponsorship: string
   availability: string; termLength: string; willingToRelocate: string
   extra: string         // free-form facts Claude may use for screening answers
 }
@@ -94,9 +94,9 @@ export const emptyResume = (): Resume => ({
 })
 
 export const emptyProfile = (): Profile => ({
-  firstName: '', lastName: '', email: '', phone: '', city: '', province: '', country: 'Canada',
+  firstName: '', lastName: '', email: '', phone: '', address: '', city: '', province: '', postalCode: '', country: 'Canada',
   linkedin: '', website: '', github: '', school: '', degree: '', major: 'Mechanical Engineering', gpa: '',
-  graduation: '', workAuthCanada: '', workAuthUsa: '', needsSponsorship: '', availability: '',
+  graduation: '', citizenship: '', workAuthCanada: '', workAuthUsa: '', needsSponsorship: '', availability: '',
   termLength: '', willingToRelocate: '', extra: ''
 })
 

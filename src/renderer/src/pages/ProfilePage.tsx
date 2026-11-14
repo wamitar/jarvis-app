@@ -22,13 +22,15 @@ export function ProfilePage({ state, reload, notify }: { state: AppState; reload
   return (
     <div className="page narrow">
       <div className="head">
-        <div><h1>Application profile</h1><p>Answers the app types into application forms. Stored only on this Mac. Fields you leave empty are left for you on the form.</p></div>
+        <div><h1>Application profile</h1><p>Answers the app types into application forms. Stored only on this Mac. Claude fills every other question it can work out from these answers and your resume.</p></div>
         <button className="btn primary" onClick={save} disabled={!dirty}>Save changes</button>
       </div>
       <div className="card"><h3>Contact</h3><div className="stack">
         <div className="grid2">{T('firstName', 'First name')}{T('lastName', 'Last name')}</div>
         <div className="grid2">{T('email', 'Email')}{T('phone', 'Phone')}</div>
-        <div className="grid3">{T('city', 'City')}{T('province', 'Province or state', 'Ontario')}{T('country', 'Country')}</div>
+        {T('address', 'Street address', '123 Main St')}
+        <div className="grid2">{T('city', 'City')}{T('province', 'Province or state', 'Ontario')}</div>
+        <div className="grid2">{T('postalCode', 'Postal or ZIP code')}{T('country', 'Country')}</div>
         <div className="grid3">{T('linkedin', 'LinkedIn')}{T('github', 'GitHub')}{T('website', 'Website or portfolio')}</div>
       </div></div>
       <div className="card"><h3>School</h3><div className="stack">
@@ -36,6 +38,7 @@ export function ProfilePage({ state, reload, notify }: { state: AppState; reload
         <div className="grid3">{T('major', 'Major')}{T('gpa', 'GPA', '3.7 / 4.0')}{T('graduation', 'Expected graduation', 'April 2028')}</div>
       </div></div>
       <div className="card"><h3>Work eligibility and timing</h3><div className="stack">
+        {T('citizenship', 'Citizenship', 'United States and Canada')}
         <div className="grid3">{S('workAuthCanada', 'Authorized to work in Canada')}{S('workAuthUsa', 'Authorized to work in the USA')}{S('needsSponsorship', 'Need visa sponsorship')}</div>
         <div className="grid3">{T('availability', 'Available from', 'May 2027')}{T('termLength', 'Term length', '4 months')}{S('willingToRelocate', 'Willing to relocate')}</div>
       </div></div>

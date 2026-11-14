@@ -53,7 +53,7 @@ function handlers(): void {
 
   h('getState', (): AppState => {
     const resume = db.kvGet('resume', emptyResume())
-    return { resume, hasResume: hasResume(resume), profile: db.kvGet('profile', emptyProfile()), settings: settings(), cliFound: !!findCli(),
+    return { resume, hasResume: hasResume(resume), profile: { ...emptyProfile(), ...db.kvGet('profile', emptyProfile()) }, settings: settings(), cliFound: !!findCli(),
       usage: db.kvGet('usage', NO_USAGE), workday: workdayLogin(), lastRefresh: db.kvGet<string | null>('lastRefresh', null), boards: allBoards(settings()) }
   })
 
@@ -146,7 +146,7 @@ function handlers(): void {
   const applyArgs = (jobId: string): [Job, Profile, Resume, Tailored | null, string] => {
     const job = needJob(jobId)
     const t = db.getTailored(jobId)
-    return [job, db.kvGet('profile', emptyProfile()), t?.resume || db.kvGet('resume', emptyResume()), t && t.pdfPath && existsSync(t.pdfPath) ? t : t ? { ...t, pdfPath: null } : null, settings().writeModel]
+    return [job, { ...emptyProfile(), ...db.kvGet('profile', emptyProfile()) }, t?.resume || db.kvGet('resume', emptyResume()), t && t.pdfPath && existsSync(t.pdfPath) ? t : t ? { ...t, pdfPath: null } : null, settings().writeModel]
   }
   // Workday: the email lives in the app's settings, the password only in the Mac Keychain. Neither is sent to the window.
   const wdHooks = (jobId: string): WorkdayHooks => ({

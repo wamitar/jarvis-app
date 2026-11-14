@@ -1,3 +1,4 @@
 node_modules/
 out/
 release/
+profile-db-backup-*.db
