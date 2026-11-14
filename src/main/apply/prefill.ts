@@ -148,6 +148,8 @@ function collectFields(startIdx: number): Field[] {
       continue
     }
     if (!visible(el) || input.readOnly) continue
+    // Hidden stand-ins some forms keep beside custom dropdowns for their own validation (Greenhouse, react-select).
+    if (el.getAttribute('aria-hidden') === 'true' || Number(getComputedStyle(el).opacity) === 0 || (el.tabIndex < 0 && el.getAttribute('role') !== 'combobox')) continue
     const l = labelFor(el)
     const name = `${el.getAttribute('name') || ''} ${el.getAttribute('id') || ''} ${el.getAttribute('autocomplete') || ''} ${el.getAttribute('data-automation-id') || ''}`.trim()
     const required = input.required || el.getAttribute('aria-required') === 'true' || l.star
@@ -226,10 +228,10 @@ function bestOption(options: string[], want: string): number {
 /** Types like a person (focus, select all, keystrokes, blur) so React-based forms such as Workday register it. */
 async function typeInto(loc: Locator, value: string, keystrokes: boolean): Promise<void> {
   if (!keystrokes) {
-    await loc.fill(value)
+    await loc.fill(value, { timeout: 8000 })
     if ((await loc.inputValue().catch(() => value)) === value) return
   }
-  await loc.click()
+  await loc.click({ timeout: 8000 })
   await loc.press('ControlOrMeta+a')
   await loc.press('Backspace')
   if (value.length <= 400) await loc.pressSequentially(value, { delay: 6 })
@@ -254,11 +256,12 @@ async function clickOption(frame: Frame, want: string): Promise<string | null> {
   return null
 }
 
-async function pickInCombobox(frame: Frame, loc: Locator, value: string): Promise<string | null> {
+async function pickInCombobox(frame: Frame, loc: Locator, value: string, workday: boolean): Promise<string | null> {
   await loc.click({ timeout: 2500 })
   await loc.press('ControlOrMeta+a').catch(() => {})
   await loc.pressSequentially(value, { delay: 25 })
-  await loc.press('Enter').catch(() => {})   // Workday searches on Enter; harmless elsewhere
+  // Workday searches on Enter. Anywhere else Enter can submit the form, so it is never pressed there.
+  if (workday) await loc.press('Enter').catch(() => {})
   await frame.locator('[role="option"]').first().waitFor({ state: 'visible', timeout: 3000 }).catch(() => {})
   await frame.page().waitForTimeout(300)
   let picked = await clickOption(frame, value)
@@ -359,7 +362,7 @@ How to answer:
 - For a searchable field without options, reply with the text to search for (e.g. a school name, a skill, a country).
 - Work authorization, sponsorship and citizenship come from candidate_facts. Answer them directly, including export-control or "U.S. person" (ITAR/EAR) questions: a U.S. citizen is a U.S. person.
 - Gender, race, ethnicity, veteran, disability, sexual orientation and similar self-identification questions: choose the option that declines to answer ("I don't wish to answer", "Decline to self-identify", "I do not want to answer").
-- Tick consent, acknowledgement, privacy, "I certify" and terms boxes. Do not tick marketing or newsletter boxes.
+- Tick consent, acknowledgement, privacy, "I certify" and terms boxes. Do not tick marketing or newsletter boxes, and answer No to consenting to text (SMS) messages.
 - "Have you worked for / been employed by this company before?", "Are you related to an employee?", non-compete or "Have you been convicted" style questions: answer No unless the facts say otherwise.
 - "How did you hear about us?": pick the option closest to the company's careers website or a job board.
 - Age questions ("Are you 18 or older?"): Yes, the candidate is a university student.
@@ -469,7 +472,7 @@ async function applyAnswer(x: Located, value: Answer['value'], workday: boolean,
       const items = Array.isArray(value) ? value.map(String) : f.multi ? text.split(/,|;/).map(s => s.trim()).filter(Boolean) : [text]
       const picked: string[] = []
       for (const it of items.filter(i => i.trim()).slice(0, 15)) {
-        const got = await pickInCombobox(frame, loc.first(), it).catch(() => null)
+        const got = await pickInCombobox(frame, loc.first(), it, workday).catch(() => null)
         if (got) picked.push(got)
       }
       if (picked.length) res.filled.push(`${label}: ${picked.join(', ')}`)
@@ -524,7 +527,27 @@ async function addWorkdayBlocks(p: Page, fields: Located[], resume: Resume, res:
   return added
 }
 
+/** While the app is filling, any form submission (an accidental Enter, a stray click) is cancelled. */
+async function guardSubmit(p: Page, on: boolean): Promise<void> {
+  for (const frame of p.frames()) {
+    await frame.evaluate((enable: boolean) => {
+      const w = window as unknown as { __ihGuard?: boolean; __ihGuardInstalled?: boolean }
+      if (!w.__ihGuardInstalled) {
+        w.__ihGuardInstalled = true
+        document.addEventListener('submit', e => { if (w.__ihGuard) { e.preventDefault(); e.stopImmediatePropagation() } }, true)
+      }
+      w.__ihGuard = enable
+    }, on).catch(() => {})
+  }
+}
+
 async function fillCurrentPage(p: Page, job: Job, profile: Profile, resume: Resume, tailored: Tailored | null, model: string, label = 'Application page'): Promise<PrefillResult> {
+  await guardSubmit(p, true)
+  try { return await fillPage(p, job, profile, resume, tailored, model, label) }
+  finally { await guardSubmit(p, false) }
+}
+
+async function fillPage(p: Page, job: Job, profile: Profile, resume: Resume, tailored: Tailored | null, model: string, label: string): Promise<PrefillResult> {
   const res = blank(label)
   const workday = isWorkdayUrl(p.url())
   const attempted = new Set<string>()
