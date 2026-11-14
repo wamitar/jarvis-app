@@ -437,7 +437,7 @@ How to answer:
 - Preferred method of contact: Email.
 - AI screening, AI interviews or automated/AI evaluation of the application: answer No (opt out) whenever the form offers the choice.
 - "Have you worked for / been employed by this company before?", "Are you related to an employee?", non-compete or "Have you been convicted" style questions: answer No unless the facts say otherwise.
-- "How did you hear about us?": pick the option closest to the company's careers website or a job board.
+- "How did you hear about us?": always the company's careers website. Pick the option closest to that ("Careers Website", "Company Website", "Corporate Website", "Career Site"); for a free-text box write "Company careers website". Only if no such option exists, pick a job board.
 - "Highest level of education completed": the candidate has NOT finished a degree yet; pick high school / secondary (or the closest "some college / currently enrolled" option). A question about the degree being pursued gets the bachelor's degree.
 - Age questions ("Are you 18 or older?"): Yes, the candidate is a university student.
 - Willing to relocate / travel / work on site: Yes for this internship unless the facts say otherwise.
