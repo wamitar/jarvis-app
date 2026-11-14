@@ -713,6 +713,8 @@ const hostOf = (u: string): string => { try { return new URL(u).hostname } catch
 export const isWorkdayUrl = (u: string): boolean => { const h = hostOf(u); return WD_HOST.test(h) || (!!testHost && h === testHost) }
 const wd = (id: string): string => `[data-automation-id="${id}"]`
 const triedCreate = new Set<string>()
+/** Employers where Workday rejected the saved login. The app stops trying there: repeated failures can lock the account. */
+const loginRejected = new Set<string>()
 let watchToken = 0
 
 const seen = (p: Page, sel: string, timeout = 0): Promise<boolean> => {
@@ -756,7 +758,10 @@ async function toSignIn(p: Page): Promise<void> {
 }
 
 /** Types the login and presses Sign In, then waits to see the password box go. Tries twice. */
-async function signIn(p: Page, login: { email: string; password: string }, res: PrefillResult): Promise<boolean> {
+const VERIFY_HINT = 'The app will not try this login again here, so the account cannot get locked. If the account is new, open the verification email from this employer\'s Workday and click the link first. Then sign in yourself in the browser (or use "Forgot your password?"); the app carries on once you are in.'
+
+async function signIn(p: Page, login: { email: string; password: string }, res: PrefillResult, tenant = ''): Promise<boolean> {
+  if (tenant && loginRejected.has(tenant)) { res.note = 'Workday rejected the saved login here earlier. ' + VERIFY_HINT; return false }
   for (let attempt = 0; attempt < 2; attempt++) {
     await typeInto(p.locator(wd('email')).first(), login.email, true)
     await typeInto(p.locator(wd('password')).first(), login.password, true)
@@ -765,7 +770,7 @@ async function signIn(p: Page, login: { email: string; password: string }, res: 
     const gone = await p.locator('input[type="password"]:visible').first().waitFor({ state: 'hidden', timeout: 15_000 }).then(() => true).catch(() => false)
     if (gone) return true
     const err = await wdError(p)
-    if (/password|incorrect|invalid|locked|verif|code/i.test(err)) { res.note = `Workday says: "${err}". Finish signing in yourself in the browser; the app carries on once you are in.`; return false }
+    if (/password|incorrect|invalid|locked|verif|code/i.test(err)) { if (tenant) loginRejected.add(tenant); res.note = `Workday says: "${err}". ${VERIFY_HINT}`; return false }
   }
   res.note = 'Workday did not get past sign-in. Sign in yourself in the browser; the app carries on once you are in.'
   return false
@@ -787,7 +792,7 @@ async function authStep(p: Page, tenant: string, hooks: WorkdayHooks): Promise<P
     creating = await seen(p, wd('verifyPassword'), 6000)
   }
   if (!creating) {
-    if (await signIn(p, login, res)) { hooks.markKnown(tenant); res.note = 'Signed in. The next pages are filled as they appear.' }
+    if (await signIn(p, login, res, tenant)) { hooks.markKnown(tenant); res.note = 'Signed in. The next pages are filled as they appear.' }
     return res
   }
   triedCreate.add(tenant)
@@ -805,12 +810,19 @@ async function authStep(p: Page, tenant: string, hooks: WorkdayHooks): Promise<P
   await pressWd(p, 'createAccountSubmitButton')
   res.filled.push('Pressed Create Account')
   const gone = await p.locator('input[type="password"]:visible').first().waitFor({ state: 'hidden', timeout: 15_000 }).then(() => true).catch(() => false)
+  await p.waitForTimeout(1500)
+  const pageText = (await p.locator('body').innerText().catch(() => '')).slice(0, 4000)
+  if (/verify (your )?(email|account)|verification (email|link)|check your (email|inbox)|sent (you )?an email/i.test(pageText)) {
+    hooks.markKnown(tenant); loginRejected.add(tenant)
+    res.note = 'Account created. Workday sent a verification email: open it, click the link, then sign in here yourself. The app carries on once you are in.'
+    return res
+  }
   if (gone) { hooks.markKnown(tenant); res.note = 'Pressed Create Account. If Workday emails you a verification link, open it and come back. If the account already existed, the app signs in on the next page.'; return res }
   // The account already exists (Workday says so, or simply stays here): sign in instead.
   const err = await wdError(p)
   hooks.markKnown(tenant)
   await toSignIn(p)
-  if (await signIn(p, login, res)) res.note = `${err ? `Workday said "${err}", so the app signed in instead. ` : 'An account already existed, so the app signed in. '}The next pages are filled as they appear.`
+  if (await signIn(p, login, res, tenant)) res.note = `${err ? `Workday said "${err}", so the app signed in instead. ` : 'An account already existed, so the app signed in. '}The next pages are filled as they appear.`
   return res
 }
 
@@ -853,7 +865,7 @@ async function watchWorkday(p: Page, args: Args, hooks: WorkdayHooks): Promise<v
     try {
       const sig = isWorkdayUrl(p.url()) ? await signature(p) : ''
       // A sign-in page that is still showing after a try gets another go (up to three), so one slow login never stalls the run.
-      if (sig && done.has(sig) && /\|pw[1-9]/.test(sig) && (authTries.get(sig) || 0) < 3) {
+      if (sig && done.has(sig) && /\|pw[1-9]/.test(sig) && (authTries.get(sig) || 0) < 3 && !loginRejected.has(hostOf(p.url()).split('.')[0])) {
         await p.waitForTimeout(6000)
         if ((await signature(p)) === sig && (await pwVisible(p))) done.delete(sig)
       }

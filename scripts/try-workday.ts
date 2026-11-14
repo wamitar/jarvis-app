@@ -21,6 +21,10 @@ const job = { id: r.id, source: r.source, company: r.company, title: r.title, lo
 const t = db.prepare('select * from tailored where job_id = ?').get(jobId) as any
 const tailored: Tailored | null = t ? { jobId, resume: JSON.parse(t.resume), coverLetter: t.cover_letter || '', changes: [], warnings: [],
   pdfPath: t.pdf_path && existsSync(t.pdf_path) ? t.pdf_path : null, updatedAt: t.updated_at } : null
+// Same rule as the app: no tailored PDF, so attach the user's own resume PDF.
+const own = kv('resumePdf'); const ownPdf = own && existsSync(own) ? own : null
+const withPdf: Tailored | null = tailored?.pdfPath ? tailored : tailored ? { ...tailored, pdfPath: ownPdf }
+  : ownPdf ? { jobId, resume: kv('resume'), coverLetter: '', changes: [], warnings: [], pdfPath: ownPdf, updatedAt: '' } : null
 const profile = { ...emptyProfile(), ...kv('profile') }
 const resume = tailored?.resume || kv('resume')
 const known: string[] = [...(kv('workdayTenants') || []), ...(process.env.WD_KNOWN || '').split(',').filter(Boolean)]
@@ -29,7 +33,7 @@ const hooks = {
   isKnown: (tn: string) => known.includes(tn), markKnown: (tn: string) => { if (!known.includes(tn)) known.push(tn) },
   autoCreate: !!kv('settings')?.workdayAutoCreate, onUpdate: () => {}
 }
-console.log(`Job: ${job.company} — ${job.title}\n${job.applyUrl}\nTailored PDF: ${tailored?.pdfPath || 'none'}`)
+console.log(`Job: ${job.company} — ${job.title}\n${job.applyUrl}\nResume PDF: ${withPdf?.pdfPath || 'none'}`)
 
 const ctx = await chromium.launchPersistentContext(mkdtempSync(join(tmpdir(), 'wd-')), { channel: 'chrome', headless: false, viewport: { width: 1280, height: 900 } })
 const p = ctx.pages()[0] || await ctx.newPage()
@@ -66,7 +70,7 @@ for (let i = 1; i <= 14; i++) {
   }
   const redo = !!process.env.REDO && !!st && new RegExp(process.env.REDO, 'i').test(st)
   if (redo) console.log('  (re-deciding every field on this page)')
-  const res = await (redo ? _test.fillCurrentPage(p, job, profile, resume, tailored, 'sonnet', 'Workday: ' + st, true) : _test.workdayStep(p, [job, profile, resume, tailored, 'sonnet'], hooks)).catch(e => ({ page: 'error', filled: [], skipped: [String(e).slice(0, 200)], drafted: [], note: '' }))
+  const res = await (redo ? _test.fillCurrentPage(p, job, profile, resume, withPdf, 'sonnet', 'Workday: ' + st, true) : _test.workdayStep(p, [job, profile, resume, withPdf, 'sonnet'], hooks)).catch(e => ({ page: 'error', filled: [], skipped: [String(e).slice(0, 200)], drafted: [], note: '' }))
   console.log(`[${res.page}] ${((Date.now() - t0) / 1000).toFixed(0)}s`)
   res.filled.forEach(x => console.log('  ✓ ' + x.slice(0, 150)))
   res.drafted.forEach(d => console.log(`  ✎ ${d.question.slice(0, 80)} → ${d.answer.slice(0, 110)}…`))
