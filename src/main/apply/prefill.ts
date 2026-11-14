@@ -299,7 +299,7 @@ async function clickOption(frame: Frame, want: string): Promise<string | null> {
     const o = loc.nth(k)
     if (await o.isVisible().catch(() => false)) {
       // Already ticked (Workday's search selects a single match on Enter): clicking would untick it.
-      if (await o.locator('[data-automation-checked="Checked"], [data-uxi-multiselectlistitem-isselected="true"]').count().catch(() => 0)) return opts[i]
+      if (await o.locator('[data-automation-id="checkbox"][data-automationcheckboxchecked="true"]').count().catch(() => 0)) return opts[i]
       // Workday puts a radio/checkbox inside some options; clicking the option row picks it.
       // A normal click first; if something covers the option (Workday's chosen-items list), send the press
       // straight to the option element, which Workday accepts, rather than clicking whatever is on top.
@@ -402,7 +402,7 @@ async function decide(fields: Field[], job: Job, profile: Profile, resume: Resum
   const list = fields.map(f => ({
     id: f.idx, type: f.kind === 'combobox' ? (f.multi ? 'searchable multi-select' : 'searchable dropdown') : f.kind === 'dropdown' ? 'dropdown' : f.kind,
     ...(f.inputType && !['text', 'textarea', 'select', 'radio', 'checkbox', 'dropdown', 'combobox'].includes(f.inputType) ? { inputType: f.inputType } : {}),
-    label: f.label.slice(0, 300), ...(f.label.length < 4 && f.name ? { fieldName: f.name.slice(0, 80) } : {}), ...(f.question ? { question: f.question.slice(0, 300) } : {}), ...(f.section ? { section: f.section } : {}),
+    label: f.label.slice(0, 1500), ...(f.label.length < 4 && f.name ? { fieldName: f.name.slice(0, 80) } : {}), ...(f.question ? { question: f.question.slice(0, 1500) } : {}), ...(f.section ? { section: f.section } : {}),
     required: f.required, ...(f.options.length ? { options: f.options.slice(0, 250) } : {}), ...(f.maxLength ? { maxLength: f.maxLength } : {})
   }))
   const { extra, ...facts } = profile
@@ -447,6 +447,8 @@ How to answer:
 - Searchable multi-select of skills: reply with an array of up to 8 skills from the resume.
 - Dates: match the format the label or inputType implies (MM, YYYY, MM/YYYY, YYYY-MM-DD). A "date" for a signature or self-identification form is today. Start date is the candidate's availability.
 - Fields in sections like "Work Experience 1", "Work Experience 2", "Education 1" map to the resume entries in the order they appear on the resume. "Role Description" or similar: 2 to 4 plain sentences from that entry's bullets.
+- Notice period for a current employer: "2 weeks".
+- Lists of countries in a question matter: answer from the candidate's actual citizenships (United States and Canada) against the exact list shown.
 - Salary or compensation: if the job states a pay range, give its minimum; otherwise reply "Open to discussion" for text fields.
 - Open questions ("Why do you want...", "Tell us about..."): 2 to 5 specific, first-person sentences built from the resume, facts and job. No clichés. Respect maxLength.
 - Never invent experience, employers, credentials, grades or numbers. Reply "" only when the answer truly cannot be known (a government ID number, a date of birth, a password) or when a field should stay blank (address line 2, middle name, an optional link the candidate does not have).
@@ -559,7 +561,14 @@ async function applyAnswer(x: Located, value: Answer['value'], workday: boolean,
       await closeLists(frame)
       await loc.first().click({ timeout: 2500 })
       await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 2500 }).catch(() => {})
-      const picked = await clickOption(frame, text)
+      let picked = await clickOption(frame, text)
+      const shows = async (): Promise<boolean> => !!picked && (await loc.first().innerText().catch(() => '')).replace(/\s+/g, ' ').includes(picked.slice(0, 40))
+      if (picked && !(await frame.page().waitForTimeout(400).then(shows))) {
+        await closeLists(frame); await loc.first().click({ timeout: 2500 }).catch(() => {})
+        await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 2500 }).catch(() => {})
+        picked = await clickOption(frame, text)
+        if (picked && !(await frame.page().waitForTimeout(400).then(shows))) picked = null
+      }
       if (picked) res.filled.push(`${label}: ${picked}`)
       else { await frame.page().keyboard.press('Escape').catch(() => {}); res.skipped.push(`${label} (dropdown: "${text.slice(0, 40)}" is not one of the choices)`) }
       return
@@ -580,7 +589,11 @@ async function applyAnswer(x: Located, value: Answer['value'], workday: boolean,
 }
 
 async function attachFiles(fields: Located[], tailored: Tailored | null, res: PrefillResult): Promise<void> {
-  let resumeDone = false
+  // Already uploaded (Workday keeps the file from its "Autofill with Resume" step): never upload a second copy.
+  const page0 = fields[0]?.frame.page()
+  const already = page0 ? await page0.locator('[data-automation-id="file-upload-successful"], [data-automation-id="fileUploadSuccessMessage"]').count().catch(() => 0) +
+    (/successfully uploaded/i.test(await page0.locator('body').innerText().catch(() => '')) ? 1 : 0) : 0
+  let resumeDone = already > 0
   for (const { frame, f } of fields.filter(x => x.f.kind === 'file')) {
     const key = `${f.label} ${f.name}`
     const isCover = /cover/i.test(key)
@@ -786,9 +799,11 @@ async function authStep(p: Page, tenant: string, hooks: WorkdayHooks): Promise<P
   let creating = await seen(p, wd('verifyPassword'))
   // Workday often opens on "Create Account" even when the account exists: sign in for employers seen before.
   if (creating && (hooks.isKnown(tenant) || triedCreate.has(tenant))) { await toSignIn(p); creating = await seen(p, wd('verifyPassword')) }
-  if (!creating && !hooks.isKnown(tenant) && !triedCreate.has(tenant) && (await seen(p, wd('createAccountLink')))) {
+  // Some employers label the link differently, so it is also found by its text under the sign-in form.
+  const createLink = p.locator(`${wd('createAccountLink')}, button:text-is("Create Account"):below(${wd('signInSubmitButton')}), a:text-is("Create Account"):below(${wd('signInSubmitButton')})`).first()
+  if (!creating && !hooks.isKnown(tenant) && !triedCreate.has(tenant) && (await createLink.isVisible().catch(() => false))) {
     triedCreate.add(tenant)
-    await p.locator(wd('createAccountLink')).first().click()
+    await createLink.click()
     creating = await seen(p, wd('verifyPassword'), 6000)
   }
   if (!creating) {
@@ -835,7 +850,13 @@ async function workdayStep(p: Page, args: Args, hooks: WorkdayHooks): Promise<Pr
     await p.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {})
     return blank('Workday', 'Workday showed an error page, so the app refreshed it.')
   }
+  // The "Create Account/Sign In" step can show its progress bar before its password boxes: wait for them,
+  // and never treat that step as an application page (doing so marked employers as "has an account").
+  const stepNow = await p.locator(wd('progressBarActiveStep')).first().innerText({ timeout: 400 }).catch(() => '')
+  const authPage = /sign in|create account/i.test(stepNow) || (await seen(p, `${wd('signInContent')}, ${wd('signInFormo')}`))
+  if (authPage) await p.locator('input[type="password"]:visible').first().waitFor({ timeout: 10_000 }).catch(() => {})
   if ((await p.locator('input[type="password"]:visible').count().catch(() => 0)) > 0) return authStep(p, tenant, hooks)
+  if (authPage) return blank('Workday sign-in', 'The sign-in page is still loading. The app tries again when it appears; if it does not, press "Fill this page again".')
   if ((await seen(p, wd('applyManually'))) || (await seen(p, wd('autofillWithResume')))) {
     const res = blank('Workday: how to apply'); await chooseStart(p, tailored, res); return res
   }
