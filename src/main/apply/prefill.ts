@@ -686,7 +686,7 @@ async function fillPage(p: Page, job: Job, profile: Profile, resume: Resume, tai
     for (const x of fields) if (x.f.required && isEmpty(x.f)) res.skipped.push(`${short(x.f)} (required, still empty)`)
     res.note = 'Check every field in the browser, finish anything listed as left for you, then press Submit yourself.'
   }
-  if (!tailored?.pdfPath) res.note += ' No tailored resume PDF was saved for this job, so nothing was attached.'
+  if (!tailored?.pdfPath) res.note += ' No resume PDF was available (no tailored one, and none saved on the Resume page), so nothing was attached.'
   res.skipped = Array.from(new Set(res.skipped))
   return res
 }

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, nativeTheme } from 'electron'
 import { join } from 'node:path'
-import { existsSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { basename } from 'node:path'
 import type { Job, JobStatus, PrefillResult, Profile, RawJob, RefreshProgress, Resume, Settings, Tailored, Usage, WorkdayLogin } from '../shared/types'
 import { defaultSettings, emptyProfile, emptyResume } from '../shared/types'
 import type { AppState } from '../shared/api'
@@ -28,6 +29,21 @@ const progress = (p: RefreshProgress | null): void => send('progress', p)
 const settings = (): Settings => ({ ...defaultSettings(), ...db.kvGet<Partial<Settings>>('settings', {}) })
 const hasResume = (r: Resume): boolean => !!(r.name || r.experience.length || r.projects.length || r.education.length)
 let busy = false
+
+/** The user's own resume PDF, kept as a copy in the data folder under its original file name. */
+const resumePdf = (): { name: string; path: string } | null => {
+  const p = db.kvGet<string>('resumePdf', '')
+  return p && existsSync(p) ? { name: basename(p), path: p } : null
+}
+function keepResumePdf(src: string): { name: string; path: string } {
+  const dir = join(app.getPath('userData'), 'resume-pdf')
+  mkdirSync(dir, { recursive: true })
+  for (const f of readdirSync(dir)) rmSync(join(dir, f), { force: true })
+  const dest = join(dir, basename(src))
+  copyFileSync(src, dest)
+  db.kvSet('resumePdf', dest)
+  return { name: basename(dest), path: dest }
+}
 async function exclusive<T>(fn: () => Promise<T>): Promise<T> {
   if (busy) throw new Error('Another job refresh or scoring run is still going. Wait for it to finish.')
   busy = true
@@ -54,7 +70,7 @@ function handlers(): void {
   h('getState', (): AppState => {
     const resume = db.kvGet('resume', emptyResume())
     return { resume, hasResume: hasResume(resume), profile: { ...emptyProfile(), ...db.kvGet('profile', emptyProfile()) }, settings: settings(), cliFound: !!findCli(),
-      usage: db.kvGet('usage', NO_USAGE), workday: workdayLogin(), lastRefresh: db.kvGet<string | null>('lastRefresh', null), boards: allBoards(settings()) }
+      usage: db.kvGet('usage', NO_USAGE), workday: workdayLogin(), lastRefresh: db.kvGet<string | null>('lastRefresh', null), boards: allBoards(settings()), resumePdf: resumePdf() }
   })
 
   h('importResume', async (): Promise<Resume | null> => {
@@ -64,6 +80,7 @@ function handlers(): void {
     if (text.length < 80) throw new Error('No text could be read from that PDF. If it is a scan or an image, export a text-based PDF and try again.')
     const resume = await structureResume(text, settings().writeModel)
     db.kvSet('resumeRaw', text); db.kvSet('resume', resume)
+    keepResumePdf(pick.filePaths[0])
     // Seed the application profile from the resume the first time.
     const p = db.kvGet('profile', emptyProfile())
     if (!p.firstName && !p.email) {
@@ -75,6 +92,12 @@ function handlers(): void {
     }
     return resume
   })
+  h('chooseResumePdf', async (): Promise<{ name: string; path: string } | null> => {
+    const pick = await dialog.showOpenDialog(win!, { title: 'Choose the resume PDF to attach to applications', properties: ['openFile'], filters: [{ name: 'PDF', extensions: ['pdf'] }] })
+    if (pick.canceled || !pick.filePaths[0]) return null
+    return keepResumePdf(pick.filePaths[0])
+  })
+  h('revealResumePdf', () => { const r = resumePdf(); if (r) shell.showItemInFolder(r.path) })
   h('saveResume', (r: Resume) => { db.kvSet('resume', normalizeResume(r)) })
   h('saveProfile', (p: Profile) => { db.kvSet('profile', { ...emptyProfile(), ...p }) })
   h('saveSettings', (s: Settings) => { db.kvSet('settings', { ...defaultSettings(), ...s }) })
@@ -146,7 +169,12 @@ function handlers(): void {
   const applyArgs = (jobId: string): [Job, Profile, Resume, Tailored | null, string] => {
     const job = needJob(jobId)
     const t = db.getTailored(jobId)
-    return [job, { ...emptyProfile(), ...db.kvGet('profile', emptyProfile()) }, t?.resume || db.kvGet('resume', emptyResume()), t && t.pdfPath && existsSync(t.pdfPath) ? t : t ? { ...t, pdfPath: null } : null, settings().writeModel]
+    // Attach the tailored PDF; without one, the user's own resume PDF.
+    const own = resumePdf()?.path || null
+    const tailored: Tailored | null = t && t.pdfPath && existsSync(t.pdfPath) ? t
+      : t ? { ...t, pdfPath: own }
+      : own ? { jobId, resume: db.kvGet('resume', emptyResume()), coverLetter: '', changes: [], warnings: [], pdfPath: own, updatedAt: '' } : null
+    return [job, { ...emptyProfile(), ...db.kvGet('profile', emptyProfile()) }, t?.resume || db.kvGet('resume', emptyResume()), tailored, settings().writeModel]
   }
   // Workday: the email lives in the app's settings, the password only in the Mac Keychain. Neither is sent to the window.
   const wdHooks = (jobId: string): WorkdayHooks => ({

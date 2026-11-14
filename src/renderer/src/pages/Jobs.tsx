@@ -168,7 +168,7 @@ function JobDetail({ job, state, reload, notify, go }: { job: Job; state: AppSta
         <div className="posting">{job.description || 'This posting has no text saved. Open the posting to read it.'}</div>
       </>)}
       {tab === 'resume' && <ResumeTab job={job} state={state} tailored={tailored} setTailored={setTailored} reload={reload} notify={notify} go={go} />}
-      {tab === 'apply' && <ApplyTab job={job} tailored={tailored} setStatus={setStatus} notify={notify} goResume={() => setTab('resume')} />}
+      {tab === 'apply' && <ApplyTab job={job} ownPdf={state.resumePdf?.name || ''} tailored={tailored} setStatus={setStatus} notify={notify} goResume={() => setTab('resume')} />}
     </div>
   )
 }
@@ -231,7 +231,7 @@ function ResumeTab({ job, state, tailored, setTailored, reload, notify, go }: { 
   )
 }
 
-function ApplyTab({ job, tailored, setStatus, notify, goResume }: { job: Job; tailored: Tailored | null; setStatus: (s: JobStatus) => Promise<void>; notify: Toast; goResume: () => void }) {
+function ApplyTab({ job, ownPdf, tailored, setStatus, notify, goResume }: { job: Job; ownPdf: string; tailored: Tailored | null; setStatus: (s: JobStatus) => Promise<void>; notify: Toast; goResume: () => void }) {
   const [busy, setBusy] = useState(false)
   const [res, setRes] = useState<PrefillResult | null>(null)
   const [earlier, setEarlier] = useState<PrefillResult[]>([])
@@ -243,7 +243,9 @@ function ApplyTab({ job, tailored, setStatus, notify, goResume }: { job: Job; ta
   }
   return (
     <div>
-      {!tailored?.pdfPath && <div className="banner warn"><span>No tailored resume PDF is saved for this job yet, so nothing will be attached.</span><button className="btn sm" onClick={goResume}>Tailor resume</button></div>}
+      {!tailored?.pdfPath && (ownPdf
+        ? <div className="banner info"><span>No tailored resume for this job, so your own resume ({ownPdf}) will be attached.</span><button className="btn sm" onClick={goResume}>Tailor resume</button></div>
+        : <div className="banner warn"><span>No resume PDF to attach: tailor one for this job, or add your PDF on the Resume page.</span><button className="btn sm" onClick={goResume}>Tailor resume</button></div>)}
       <p className="muted" style={{ marginBottom: 12 }}>The app opens the application in a Chrome window, types in your profile, attaches the tailored PDF and drafts answers to written questions. It never presses Submit, and CAPTCHAs are yours to do.{job.source === 'workday' && ' This one is on Workday: the app presses Apply, signs in or fills the account page with the login saved in Settings, then fills each page as you move through it.'}</p>
       <div className="rowx">
         <button className="btn primary" onClick={() => run(false)} disabled={busy}>{busy && <span className="spin" />}{busy ? 'Filling the form…' : 'Pre-fill application'}</button>

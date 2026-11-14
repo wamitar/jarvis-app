@@ -3,11 +3,14 @@ import type { Job, JobStatus, PrefillResult, Profile, RefreshProgress, RefreshRe
 export interface AppState {
   resume: Resume; hasResume: boolean; profile: Profile; settings: Settings
   cliFound: boolean; usage: Usage; workday: WorkdayLogin; lastRefresh: string | null; boards: Board[]
+  resumePdf: { name: string; path: string } | null   // the user's own resume PDF, attached when a job has no tailored one
 }
 
 export interface Api {
   getState(): Promise<AppState>
   importResume(): Promise<Resume | null>
+  chooseResumePdf(): Promise<{ name: string; path: string } | null>
+  revealResumePdf(): Promise<void>
   saveResume(r: Resume): Promise<void>
   saveProfile(p: Profile): Promise<void>
   saveSettings(s: Settings): Promise<void>
@@ -31,5 +34,5 @@ export interface Api {
   onPrefillUpdate(fn: (u: { jobId: string; result: PrefillResult }) => void): () => void
 }
 
-export const CHANNELS = ['getState', 'importResume', 'saveResume', 'saveProfile', 'saveSettings', 'listJobs', 'getJob', 'updateJob', 'refresh',
+export const CHANNELS = ['getState', 'importResume', 'chooseResumePdf', 'revealResumePdf', 'saveResume', 'saveProfile', 'saveSettings', 'listJobs', 'getJob', 'updateJob', 'refresh',
   'score', 'rescore', 'setWorkdayLogin', 'clearWorkdayLogin', 'addJob', 'tailor', 'saveTailored', 'revealPdf', 'prefill', 'fillAgain', 'openExternal'] as const

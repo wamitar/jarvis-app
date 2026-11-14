@@ -18,6 +18,10 @@ export function ResumePage({ state, reload, notify, go }: { state: AppState; rel
       if (r) { setResume(r); setVersion(v => v + 1); setDirty(false); await reload(); notify('Resume read. Check it below and fix anything Claude got wrong.') }
     } catch (e) { notify(errText(e), true) } finally { setBusy(false) }
   }
+  const choosePdf = async (): Promise<void> => {
+    try { const r = await window.api.chooseResumePdf(); if (r) { await reload(); notify(`${r.name} will be attached to applications that have no tailored resume.`) } }
+    catch (e) { notify(errText(e), true) }
+  }
   const save = async (): Promise<void> => { await window.api.saveResume(resume); setDirty(false); await reload(); notify('Resume saved.') }
 
   return (
@@ -35,6 +39,14 @@ export function ResumePage({ state, reload, notify, go }: { state: AppState; rel
       ) : (<>
         <div className="banner info"><span>Next: fill in your <a onClick={() => go('profile')}>Profile</a> so application forms can be pre-filled, then find jobs.</span>
           <button className="btn sm" onClick={() => go('jobs')}>Go to Jobs</button></div>
+        <div className="card"><h3>Resume PDF</h3>
+          <p className="muted small" style={{ margin: '4px 0 10px' }}>Attached to applications as-is when a job has no tailored resume. Changing it here leaves the text below untouched.</p>
+          <div className="rowx">
+            <span style={{ flex: 1 }}>{state.resumePdf ? state.resumePdf.name : <span className="muted">No PDF saved yet</span>}</span>
+            {state.resumePdf && <button className="btn sm" onClick={() => window.api.revealResumePdf()}>Show in Finder</button>}
+            <button className="btn sm" onClick={choosePdf}>{state.resumePdf ? 'Replace PDF' : 'Choose PDF'}</button>
+          </div>
+        </div>
         <ResumeEditor key={version} value={resume} onChange={r => { setResume(r); setDirty(true) }} />
       </>)}
     </div>
