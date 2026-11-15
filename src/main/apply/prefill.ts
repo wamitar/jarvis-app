@@ -267,12 +267,16 @@ function bestOption(options: string[], want: string): number {
   i = n.findIndex(o => o.startsWith(w + ' ') || w.startsWith(o + ' ')); if (i >= 0) return i
   i = n.findIndex(o => (` ${o} `).includes(` ${w} `)); if (i >= 0) return i
   if (w.length > 3) { i = n.findIndex(o => o.length > 3 && (` ${w} `).includes(` ${o} `)); if (i >= 0) return i }
-  // Last resort: most shared words, if at least half of the wanted words match.
-  const ww = new Set(w.split(' '))
+  // Last resort: most shared words. Words that every option in a list tends to share ("engineering", "science")
+  // do not count, so "Mechanical Engineering" can never settle for "Aerospace Engineering".
+  const all = w.split(' ')
+  const key = all.filter(t => !GENERIC.has(t))
+  const ww = new Set(key.length ? key : all)
   let best = -1, score = 0
   n.forEach((o, k) => { const s = o.split(' ').filter(t => ww.has(t)).length / Math.max(ww.size, 1); if (s > score) { score = s; best = k } })
-  return score >= 0.5 ? best : -1
+  return score >= (key.length ? 0.5 : 1) ? best : -1
 }
+const GENERIC = new Set(['engineering', 'engineer', 'science', 'sciences', 'studies', 'technology', 'management', 'degree', 'of', 'in', 'and', 'the', 'a', 'for', 'to', 'or', 'general', 'other', 'applied'])
 
 /** Types like a person (focus, select all, keystrokes, blur) so React-based forms such as Workday register it. */
 async function typeInto(loc: Locator, value: string, keystrokes: boolean): Promise<void> {
@@ -334,6 +338,7 @@ async function pickInCombobox(frame: Frame, loc: Locator, value: string, workday
   if (workday) await loc.press('Enter').catch(() => {})
   await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 4000 }).catch(() => {})
   await frame.page().waitForTimeout(workday ? 900 : 300)
+  let shown = await visibleOptions(frame)
   let picked = await clickOption(frame, value)
   if (!picked) {
     // Search text did not match an option: clear it and pick from the full list instead.
@@ -342,13 +347,17 @@ async function pickInCombobox(frame: Frame, loc: Locator, value: string, workday
     await loc.evaluate((e: HTMLElement) => e.blur()).catch(() => {})
     await loc.focus().catch(() => {}); await loc.press('ArrowDown').catch(() => {})   // reopen the full list
     await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 2000 }).catch(() => {})
+    shown = await visibleOptions(frame)
     picked = await clickOption(frame, value)
   }
   if (picked) {
     // Two-level lists (Workday "How did you hear about us?"): a category opens a sub-list.
     await frame.page().waitForTimeout(500)
     const sub = await visibleOptions(frame)
-    if (sub.length && !sub.includes(picked)) { const second = await clickOption(frame, value) || (sub.length ? (await frame.locator(OPT + ':visible').first().click().then(() => sub[0]).catch(() => null)) : null); if (second) picked += ' › ' + second }
+    // Only a list that is entirely new counts as a sub-list. If the same results are still showing (a long
+    // field-of-study list, say), nothing more is clicked: picking its first entry would choose the wrong thing.
+    const isSubList = sub.length > 0 && !sub.includes(picked) && !sub.some(o => shown.includes(o))
+    if (isSubList) { const second = await clickOption(frame, value) || (await frame.locator(OPT + ':visible').first().click().then(() => sub[0]).catch(() => null)); if (second) picked += ' › ' + second }
   }
   if (!picked) await clearSearch(loc)
   await frame.page().keyboard.press('Escape').catch(() => {})
