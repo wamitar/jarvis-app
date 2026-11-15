@@ -6,14 +6,16 @@ import { fetchAshby } from './ashby'
 import { fetchWorkday, fetchWorkdayDetail } from './workday'
 import { fetchJobBank, fetchJobBankDetail } from './jobbank'
 import { fetchAdzuna } from './adzuna'
-import { eightfoldDetail, fetchAmazon, fetchApple, fetchEightfold, fetchGoogle, fetchOracle, fetchSmartRecruiters, oracleDetail, smartRecruitersDetail } from './bigtech'
+import { bambooHrDetail, fetchBambooHr, fetchSuccessFactors, fetchUkg, fetchWorkable, successFactorsDetail, workableDetail } from './canada'
+import { eightfoldDetail, fetchAmazon, fetchApple, fetchEightfold, fetchGoogle, fetchJibe, fetchOracle, fetchSmartRecruiters, oracleDetail, smartRecruitersDetail } from './bigtech'
 import { pool } from './util'
 
 export interface FetchOutcome { jobs: RawJob[]; errors: string[] }
 
 const FETCHERS: Record<Board['ats'], (b: Board) => Promise<RawJob[]>> = {
   greenhouse: fetchGreenhouse, lever: fetchLever, ashby: fetchAshby, workday: fetchWorkday,
-  amazon: fetchAmazon, google: fetchGoogle, apple: fetchApple, eightfold: fetchEightfold, oracle: fetchOracle, smartrecruiters: fetchSmartRecruiters
+  amazon: fetchAmazon, google: fetchGoogle, apple: fetchApple, eightfold: fetchEightfold, oracle: fetchOracle, smartrecruiters: fetchSmartRecruiters, jibe: fetchJibe,
+  successfactors: fetchSuccessFactors, ukg: fetchUkg, bamboohr: fetchBambooHr, workable: fetchWorkable
 }
 
 export const FETCHERS_FOR_TEST = FETCHERS
@@ -53,8 +55,9 @@ export async function fetchDetail(j: RawJob): Promise<{ description: string; loc
   if (j.source === 'workday') return fetchWorkdayDetail(j)
   if (j.source === 'jobbank') return { description: await fetchJobBankDetail(j), location: j.location }
   if (j.detailUrl) {
-    const description = j.source === 'eightfold' ? await eightfoldDetail(j.detailUrl) : j.source === 'oracle' ? await oracleDetail(j.detailUrl) : await smartRecruitersDetail(j.detailUrl)
-    return { description, location: j.location }
+    const read = j.source === 'eightfold' ? eightfoldDetail : j.source === 'oracle' ? oracleDetail : j.source === 'successfactors' ? successFactorsDetail
+      : j.source === 'bamboohr' ? bambooHrDetail : j.source === 'workable' ? workableDetail : smartRecruitersDetail
+    return { description: await read(j.detailUrl), location: j.location }
   }
   return { description: j.description, location: j.location }
 }

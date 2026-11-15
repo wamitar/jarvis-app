@@ -6,6 +6,7 @@ import { resumeToText } from '../../../shared/types'
 import { ResumeEditor } from '../components/ResumeEditor'
 import { errText, type PageId, type Toast } from '../App'
 import { STATUS_LABEL } from './Tracker'
+import { BLOCKED } from './SettingsPage'
 
 const REGION_LABEL: Record<string, string> = { ontario: 'Ontario', canada: 'Canada', usa: 'USA', other: 'Other' }
 const scoreClass = (s: number | null): string => (s == null ? '' : s >= 75 ? ' hi' : s >= 50 ? ' mid' : ' lo')
@@ -122,6 +123,7 @@ function AddJob({ notify, done }: { notify: Toast; done: (id: string | null) => 
     <div className="card" style={{ marginBottom: 14 }}>
       <h3>Add a job from anywhere</h3>
       <p className="muted small" style={{ marginBottom: 8 }}>For postings on LinkedIn, Indeed or a company site. Paste the link. If the site blocks the app from reading it, also paste the posting text.</p>
+      <p className="muted small" style={{ marginBottom: 8 }}>Meta and Tesla do not allow apps to read their job sites. Browse them yourself and paste the posting link here: {BLOCKED.map(([name, link], i) => <span key={name}>{i > 0 && ' · '}<a onClick={() => window.api.openExternal(link)}>{name} internships</a></span>)}</p>
       <div className="stack">
         <input placeholder="https://…" value={url} onChange={e => setUrl(e.target.value)} />
         <textarea rows={3} placeholder="Posting text (optional if the link can be read)" value={text} onChange={e => setText(e.target.value)} />

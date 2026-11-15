@@ -1,8 +1,8 @@
-import type { Job, JobStatus, PrefillResult, Profile, RefreshProgress, RefreshResult, Resume, Settings, Tailored, Board, Usage, WorkdayLogin } from './types'
+import type { Job, JobStatus, PrefillResult, Profile, RefreshProgress, RefreshResult, Resume, Settings, Tailored, Board, Coverage, Usage, WorkdayLogin } from './types'
 
 export interface AppState {
   resume: Resume; hasResume: boolean; profile: Profile; settings: Settings
-  cliFound: boolean; usage: Usage; workday: WorkdayLogin; lastRefresh: string | null; boards: Board[]
+  cliFound: boolean; usage: Usage; workday: WorkdayLogin; lastRefresh: string | null; boards: Board[]; coverage: Coverage[]
   resumePdf: { name: string; path: string } | null   // the user's own resume PDF, attached when a job has no tailored one
 }
 

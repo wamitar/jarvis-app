@@ -1,8 +1,8 @@
-import type { Job, RawJob, RefreshProgress, RefreshResult, Settings } from '../shared/types'
+import type { Coverage, Job, RawJob, RefreshProgress, RefreshResult, Settings } from '../shared/types'
 import { emptyProfile, emptyResume } from '../shared/types'
 import * as db from './db'
-import { checkJob, regionOf } from './filter'
-import { fetchAll, fetchDetail } from './sources'
+import { checkJob, isInternTitle, regionOf } from './filter'
+import { allBoards, fetchAll, fetchDetail } from './sources'
 import { pool } from './sources/util'
 import { scoreJobs } from './match'
 
@@ -46,6 +46,12 @@ export async function refreshJobs(settings: Settings, progress: (p: RefreshProgr
   result.passed = direct.length
   for (const { j, region } of direct) if (db.insertJob(j, region)) result.added++
 
+  // Per-company record of this run, so the user can see a company was searched even when nothing matched.
+  const stored = db.countByCompany()
+  const cov = new Map<string, Coverage>(allBoards(settings).map(b => [b.company, { company: b.company, read: 0, interns: 0, matched: stored[b.company] || 0 }]))
+  for (const j of jobs) { const c = cov.get(j.company); if (c) { c.read++; if (isInternTitle(j.title)) c.interns++ } }
+  for (const e of errors) { const c = cov.get(e.split(': ')[0]); if (c) c.error = e.slice(e.indexOf(': ') + 2) }
+  db.kvSet('coverage', [...cov.values()])
   db.kvSet('lastRefresh', new Date().toISOString())
   return result
 }

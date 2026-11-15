@@ -70,7 +70,7 @@ function handlers(): void {
   h('getState', (): AppState => {
     const resume = db.kvGet('resume', emptyResume())
     return { resume, hasResume: hasResume(resume), profile: { ...emptyProfile(), ...db.kvGet('profile', emptyProfile()) }, settings: settings(), cliFound: !!findCli(),
-      usage: db.kvGet('usage', NO_USAGE), workday: workdayLogin(), lastRefresh: db.kvGet<string | null>('lastRefresh', null), boards: allBoards(settings()), resumePdf: resumePdf() }
+      usage: db.kvGet('usage', NO_USAGE), workday: workdayLogin(), lastRefresh: db.kvGet<string | null>('lastRefresh', null), boards: allBoards(settings()), coverage: db.kvGet('coverage', []), resumePdf: resumePdf() }
   })
 
   h('importResume', async (): Promise<Resume | null> => {

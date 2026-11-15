@@ -3,6 +3,37 @@ import type { AppState } from '../../../shared/api'
 import type { Board, Settings, WorkdayLogin } from '../../../shared/types'
 import { errText, type Toast } from '../App'
 
+const BIG_TECH = ['Amazon', 'AMD', 'Apple', 'Google', 'Microsoft', 'Netflix', 'NVIDIA', 'Intel', 'Qualcomm', 'OpenAI', 'Anthropic', 'SpaceX']
+// Sites that forbid or block automated readers. The app links to their own search instead.
+export const BLOCKED: [string, string][] = [
+  ['Meta', 'https://www.metacareers.com/jobs?q=mechanical%20intern'],
+  ['Tesla', 'https://www.tesla.com/careers/search/?query=mechanical%20intern&site=US']
+]
+
+/** What the last "Get jobs" run found at each company: proof a company was searched even when nothing matched. */
+function Coverage({ state }: { state: AppState }) {
+  const cov = state.coverage
+  if (!cov.length) return <p className="muted small" style={{ marginTop: 10 }}>Press Get jobs once to see what each company returned.</p>
+  const row = (c: (typeof cov)[number]) => (
+    <tr key={c.company}><td>{c.company}</td><td className="num">{c.error ? '–' : c.read.toLocaleString()}</td><td className="num">{c.error ? '–' : c.interns}</td><td className="num"><b>{c.matched}</b></td>
+      <td className="muted small">{c.error ? `Could not be read: ${c.error}` : c.matched ? '' : c.interns ? 'Internships posted, but none are mechanical-related undergrad roles in the USA or Canada' : 'No internships posted for these searches right now'}</td></tr>
+  )
+  const head = <thead><tr><th>Company</th><th>Postings read</th><th>Internships</th><th>In your list</th><th /></tr></thead>
+  const big = BIG_TECH.map(n => cov.find(c => c.company === n)).filter((c): c is (typeof cov)[number] => !!c)
+  const rest = cov.filter(c => !BIG_TECH.includes(c.company)).sort((a, b) => b.matched - a.matched || a.company.localeCompare(b.company))
+  return (
+    <div style={{ marginTop: 14 }}>
+      <h3>Big tech in the last search</h3>
+      <table>{head}<tbody>
+        {big.map(row)}
+        {BLOCKED.map(([name, url]) => <tr key={name}><td>{name}</td><td>–</td><td>–</td><td>–</td>
+          <td className="small">Its site does not allow automated reading. <a onClick={() => window.api.openExternal(url)}>Open {name}'s internship search</a>, then use Add a job by link.</td></tr>)}
+      </tbody></table>
+      <details style={{ marginTop: 10 }}><summary className="small" style={{ cursor: 'pointer' }}>All {rest.length} other companies</summary><table>{head}<tbody>{rest.map(row)}</tbody></table></details>
+    </div>
+  )
+}
+
 export function SettingsPage({ state, reload, notify }: { state: AppState; reload: () => Promise<void>; notify: Toast }) {
   const [s, setS] = useState<Settings>(state.settings)
   const [nb, setNb] = useState<Board>({ company: '', ats: 'greenhouse', id: '', big: false })
@@ -66,7 +97,8 @@ export function SettingsPage({ state, reload, notify }: { state: AppState; reloa
       </div>
 
       <div className="card"><h3>Job sources</h3>
-        <p className="muted">{curated} company job boards are built in, plus Job Bank Canada for Ontario. They include Amazon, Apple, Google, Microsoft, Netflix, NVIDIA, OpenAI, Anthropic, SpaceX and Y Combinator-backed hardware companies. Large employers and larger startups are searched across the USA and Canada. Every other company is kept only for Ontario jobs. Meta and Tesla block automated readers, so add their postings with Add a job by link.</p>
+        <p className="muted">{curated} company job boards are built in, plus Job Bank Canada for Ontario. They include Amazon, AMD, Apple, Google, Microsoft, Netflix, NVIDIA, OpenAI, Anthropic, SpaceX and Y Combinator-backed hardware companies. Large employers and larger startups are searched across the USA and Canada. Every other company is kept only for Ontario jobs. Meta and Tesla block automated readers, so add their postings with Add a job by link.</p>
+        <Coverage state={state} />
         <h3 style={{ marginTop: 16 }}>Add a company</h3>
         <p className="muted small" style={{ marginBottom: 8 }}>Works for companies whose careers page runs on Greenhouse, Lever or Ashby. The board id is the company part of the careers link, e.g. <b>boards.greenhouse.io/<u>acme</u></b> or <b>jobs.lever.co/<u>acme</u></b>.</p>
         <div className="rowx">

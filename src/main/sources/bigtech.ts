@@ -125,6 +125,29 @@ export async function eightfoldDetail(url: string): Promise<string> {
   return htmlToText(d.data?.jobDescription || d.job_description || '')
 }
 
+/** Jibe-hosted careers sites (AMD). id = host. */
+export async function fetchJibe(b: Board): Promise<RawJob[]> {
+  interface JJob { data: { slug: string; req_id?: string; title: string; description?: string; full_location?: string; country?: string; apply_url?: string; posted_date?: string } }
+  const seen = new Map<string, RawJob>()
+  for (const q of ['intern', 'co-op']) {
+    for (let page = 1; page <= 3; page++) {
+      const d = await getJson<{ jobs?: JJob[] }>(`https://${b.id}/api/jobs?keywords=${encodeURIComponent(q)}&page=${page}&limit=100`)
+      const jobs = d.jobs || []
+      for (const { data: j } of jobs) {
+        if (!j?.slug || seen.has(j.slug)) continue
+        const url = `https://${b.id}/careers-home/jobs/${j.slug}`
+        seen.set(j.slug, {
+          id: `jibe:${b.id.split('.')[1] || b.id}:${j.slug}`, source: 'jibe', company: b.company, title: (j.title || '').trim(),
+          location: [j.full_location, j.country].filter(Boolean).join(', '), url, applyUrl: j.apply_url || url,
+          description: htmlToText(j.description || ''), postedAt: j.posted_date || null, big: b.big
+        })
+      }
+      if (jobs.length < 100) break
+    }
+  }
+  return [...seen.values()]
+}
+
 /** Oracle Recruiting Cloud sites (Ford, Honeywell). id = "host|siteNumber". */
 export async function fetchOracle(b: Board): Promise<RawJob[]> {
   const [host, site] = b.id.split('|')

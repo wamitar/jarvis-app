@@ -80,6 +80,11 @@ export function updateJob(id: string, patch: { status?: JobStatus; notes?: strin
   }
   if (patch.notes !== undefined) db.prepare('UPDATE jobs SET notes = ? WHERE id = ?').run(patch.notes, id)
 }
+export function countByCompany(): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const r of db.prepare('SELECT company, COUNT(*) AS n FROM jobs GROUP BY company').all() as { company: string; n: number }[]) out[r.company] = r.n
+  return out
+}
 export function clearScores(): void { db.exec('UPDATE jobs SET score = NULL') }
 
 export function getTailored(jobId: string): Tailored | null {

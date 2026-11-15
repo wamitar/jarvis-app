@@ -1,6 +1,6 @@
 export type Region = 'ontario' | 'canada' | 'usa' | 'other'
 export type JobStatus = 'new' | 'saved' | 'tailored' | 'applied' | 'interview' | 'offer' | 'rejected' | 'hidden'
-export type BoardAts = 'greenhouse' | 'lever' | 'ashby' | 'workday' | 'amazon' | 'google' | 'apple' | 'eightfold' | 'oracle' | 'smartrecruiters'
+export type BoardAts = 'greenhouse' | 'lever' | 'ashby' | 'workday' | 'amazon' | 'google' | 'apple' | 'eightfold' | 'oracle' | 'smartrecruiters' | 'jibe' | 'successfactors' | 'ukg' | 'bamboohr' | 'workable'
 export type Ats = BoardAts | 'jobbank' | 'adzuna' | 'manual'
 
 export interface RawJob {
@@ -84,6 +84,9 @@ export interface Settings {
   scoreModel: string; writeModel: string
   workdayAutoCreate: boolean   // also tick the agreement box and press Create Account on Workday
 }
+
+/** What the last "Get jobs" run found at one company. */
+export interface Coverage { company: string; read: number; interns: number; matched: number; error?: string }
 
 export interface Usage { calls: number; input: number; output: number }
 export interface WorkdayLogin { email: string; hasPassword: boolean }

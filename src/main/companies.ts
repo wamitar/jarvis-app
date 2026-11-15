@@ -45,7 +45,7 @@ export const BOARDS: Board[] = [
   b('Edwards Lifesciences', 'workday', 'edwards|wd5|EdwardsCareers'), b('Illumina', 'workday', 'illumina|wd1|illumina-careers'),
   b('DuPont', 'workday', 'dupont|wd5|Jobs'), b('Shell', 'workday', 'shell|wd3|ShellCareers'), b('Chevron', 'workday', 'chevron|wd5|jobs'),
   // Big tech with their own careers sites (Meta and Tesla refuse automated readers, so they are not here)
-  b('Amazon', 'amazon', 'amazon'), b('Apple', 'apple', 'apple'), b('Google', 'google', 'google'),
+  b('Amazon', 'amazon', 'amazon'), b('AMD', 'jibe', 'careers.amd.com'), b('Apple', 'apple', 'apple'), b('Google', 'google', 'google'),
   b('Microsoft', 'eightfold', 'apply.careers.microsoft.com|microsoft.com|pcsx'), b('Netflix', 'eightfold', 'explore.jobs.netflix.net|netflix.com|v2'),
   b('Ford', 'oracle', 'efds.fa.em5.oraclecloud.com|CX_1'), b('Honeywell', 'oracle', 'ibqbjb.fa.ocs.oraclecloud.com|CX_1'), b('Bosch', 'smartrecruiters', 'BoschGroup'),
   // AI labs and more large hardware employers
@@ -69,5 +69,16 @@ export const BOARDS: Board[] = [
   b('Chaos Industries', 'greenhouse', 'chaosindustries'), b('Divergent', 'greenhouse', 'divergent'), b('Electra', 'greenhouse', 'electraaero'), b('Epirus', 'greenhouse', 'epirus'),
   b('Fervo Energy', 'greenhouse', 'fervoenergy'), b('Muon Space', 'greenhouse', 'muonspace'), b('Spire', 'greenhouse', 'spire'), b('Diligent Robotics', 'greenhouse', 'diligentrobotics'),
   b('Whisper Aero', 'greenhouse', 'whisperaero'), b('Group14', 'greenhouse', 'group14'), b('Hermeus', 'lever', 'hermeus'), b('Merlin Labs', 'lever', 'merlinlabs'),
-  b('Ambi Robotics', 'lever', 'ambirobotics')
+  b('Ambi Robotics', 'lever', 'ambirobotics'),
+  // Canadian employers
+  b('Bombardier', 'successfactors', 'jobs.bombardier.com'), b('Ontario Power Generation', 'successfactors', 'jobs.opg.com'), b('Hatch', 'successfactors', 'jobs.hatch.com'),
+  b('Celestica', 'successfactors', 'careers.celestica.com'), b('ATS Automation', 'successfactors', 'jobs.atsautomation.com'), b('Aecon', 'successfactors', 'jobs.aecon.com'),
+  b('Kinectrics', 'successfactors', 'careers.kinectrics.com'), b('L3Harris', 'successfactors', 'jobs.l3harris.com'), b('Magellan Aerospace', 'successfactors', 'careers.magellan.aero'),
+  b('PCL Construction', 'successfactors', 'careers.pcl.com'), b('Woodbridge', 'successfactors', 'jobs.woodbridgegroup.com'), b('Dana', 'successfactors', 'jobs.dana.com'),
+  b('Nutrien', 'successfactors', 'jobs.nutrien.com'), b('Teck', 'successfactors', 'jobs.teck.com'),
+  b('MDA Space', 'ukg', 'recruiting.ultipro.ca/MAC5000MCDW/JobBoard/664818ff-3594-4bec-9f30-3394e59e19f3'), b('Wajax', 'ukg', 'recruiting.ultipro.ca/WAJ5000/JobBoard/6ad8af81-3d19-6c66-9749-fa640267ce98'),
+  b('NFI Group (New Flyer)', 'workable', 'nfi-group-inc'), b('Avidbots', 'bamboohr', 'avidbots', false), b('Miovision', 'ashby', 'miovision', false),
+  b('Bruce Power', 'workday', 'brucepower|wd3|BrucePower'), b('Multimatic', 'workday', 'multimatic|wd10|MMEC'), b('BlackBerry', 'workday', 'bb|wd3|BlackBerry'),
+  b('Enbridge', 'workday', 'enbridge|wd3|enbridge_careers'), b('TC Energy', 'workday', 'tcenergy|wd3|CAREER_SITE_TC'), b('Zebra Technologies', 'workday', 'zebra|wd501|Zebra_careers'),
+  b('Canadian Natural Resources', 'oracle', 'ehaa.fa.ca2.oraclecloud.com|CNRL-Professional'), b('Samuel, Son & Co.', 'oracle', 'ebct.fa.us2.oraclecloud.com|CX_3002')
 ]
