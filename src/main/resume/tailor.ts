@@ -1,5 +1,5 @@
 import type { Job, Resume } from '../../shared/types'
-import { resumeToText } from '../../shared/types'
+import { plain, resumeToText } from '../../shared/types'
 import { askJson } from '../ai/claude'
 import { normalizeResume, RESUME_SHAPE } from './parse'
 
@@ -29,6 +29,40 @@ export function findInventions(base: Resume, baseRaw: string, tailored: Resume, 
   return [...warnings].slice(0, 25)
 }
 
+const same = (a: string, b: string): boolean => plain(a).trim().toLowerCase() === plain(b).trim().toLowerCase()
+/** Layout facts (which line is bold, places, dates) always come from the base resume, never from the model. */
+function keepLayout(base: Resume, r: Resume): void {
+  for (const e of r.experience) {
+    const b = base.experience.find(x => same(x.company, e.company) && same(x.title, e.title)) || base.experience.find(x => same(x.company, e.company))
+    if (b) { e.headline = b.headline; e.location = b.location; e.dates = b.dates }
+  }
+  for (const e of r.education) { const b = base.education.find(x => same(x.school, e.school)); if (b) { e.location = b.location; e.dates = b.dates } }
+}
+
+/** Asks Claude to cut a tailored resume that ran past one page. Nothing may be added. */
+export async function shortenResume(base: Resume, resume: Resume, job: Job, pages: number, model: string): Promise<Resume> {
+  const prompt = `This tailored resume ran to ${pages} pages when typeset. It must fit on exactly one page.
+
+<resume>
+${JSON.stringify(resume)}
+</resume>
+
+<job>
+${job.title} at ${job.company}
+${job.description.slice(0, 2500)}
+</job>
+
+Shorten it by about ${pages > 2 ? 'a third' : '4 to 6 printed lines'}: remove the bullets least relevant to this job, or tighten wordy ones. Keep every section and every entry's heading. Do not add or change any fact, and keep the **bold** markers.
+
+Reply with JSON: {"resume": <the same shape as the input>}`
+  const out = await askJson<{ resume?: unknown }>(prompt, { model, timeoutMs: 300_000 })
+  const r = normalizeResume(out.resume)
+  if (!r.experience.length && !r.projects.length) return resume
+  r.name = base.name; r.contact = base.contact
+  keepLayout(base, r)
+  return r
+}
+
 export async function tailorResume(base: Resume, baseRaw: string, job: Job, withCover: boolean, extraFacts: string, model: string): Promise<TailorOutput> {
   const prompt = `Tailor this candidate's resume for one internship posting.
 
@@ -44,10 +78,15 @@ ${job.description.slice(0, 9000)}
 </job>
 
 What you may change:
-- Rewrite the summary (2 sentences at most) to point at this role. Leave it "" if the base resume has none and there is nothing true to say.
+${base.summary.trim() ? '- Rewrite the summary (2 sentences at most) to point at this role.' : '- The resume has no summary section. Leave "summary" as "".'}
 - Reword bullets to foreground the work most relevant to this posting, using the posting's vocabulary where it truthfully describes what the candidate did.
 - Reorder bullets within an entry, reorder projects, reorder skill categories and the items within them, most relevant first.
 - Drop the least relevant bullets or projects if needed to keep the resume to one page.
+
+Format rules:
+- Text marks bold as **like this**. Keep that style: in each bullet, bold the 2 to 4 tools, methods or key numbers that matter most for this posting. Never bold a whole sentence.
+- The resume must still fit on one page. Do not make it longer than the base: the total amount of bullet text must be the same or less.
+- Copy "headline", "location" and "dates" fields unchanged.
 
 Hard rules (the candidate will be held to every word):
 - Never invent or imply experience, tools, skills, employers, degrees, dates, titles, awards or numbers that are not in the base resume.
@@ -66,6 +105,7 @@ Reply with JSON:
   const resume = normalizeResume(out.resume)
   if (!resume.name) resume.name = base.name
   resume.contact = base.contact   // contact details are never model-written
+  keepLayout(base, resume)
   resume.name = base.name
   return {
     resume, coverLetter: typeof out.coverLetter === 'string' ? out.coverLetter.trim() : '',

@@ -27,7 +27,7 @@ export function ResumePage({ state, reload, notify, go }: { state: AppState; rel
   return (
     <div className="page narrow">
       <div className="head">
-        <div><h1>Your resume</h1><p>This is the source for every tailored version. Claude may reword and reorder it, but never add to it.</p></div>
+        <div><h1>Your resume</h1><p>This is the source for every tailored version. Claude may reword and reorder it, but never add to it. Wrap words in **two asterisks** to make them bold in the PDF.</p></div>
         <div className="rowx">
           <button className="btn" onClick={importPdf} disabled={busy}>{busy && <span className="spin" />}{busy ? 'Reading PDF…' : state.hasResume ? 'Replace from PDF' : 'Import PDF'}</button>
           {state.hasResume && <button className="btn primary" onClick={save} disabled={!dirty}>Save changes</button>}

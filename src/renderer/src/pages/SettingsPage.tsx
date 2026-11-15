@@ -94,10 +94,14 @@ export function SettingsPage({ state, reload, notify }: { state: AppState; reloa
           <input type="checkbox" style={{ width: 'auto', marginTop: 3 }} checked={s.workdayAutoCreate} onChange={e => save({ ...s, workdayAutoCreate: e.target.checked }, e.target.checked ? 'The app will press Create Account for you.' : 'You press Create Account yourself.')} />
           <span>Also tick the agreement box and press <b>Create Account</b> for me. This accepts that employer's Workday terms on your behalf each time. Left off, the app fills the three fields and you press the button. Email verification links are always yours to open.</span>
         </label>
+        <label className="rowx small" style={{ marginTop: 10, alignItems: 'flex-start', flexWrap: 'nowrap' }}>
+          <input type="checkbox" style={{ width: 'auto', marginTop: 3 }} checked={s.workdayAutoContinue !== false} onChange={e => save({ ...s, workdayAutoContinue: e.target.checked }, e.target.checked ? 'The app will press Save and Continue between pages.' : 'You press Save and Continue yourself.')} />
+          <span>Press <b>Save and Continue</b> for me after each page is filled. It holds back when a required field is still empty, and it stops at the Review page: <b>Submit</b> is always yours.</span>
+        </label>
       </div>
 
       <div className="card"><h3>Job sources</h3>
-        <p className="muted">{curated} company job boards are built in, plus Job Bank Canada for Ontario. They include Amazon, AMD, Apple, Google, Microsoft, Netflix, NVIDIA, OpenAI, Anthropic, SpaceX and Y Combinator-backed hardware companies. Large employers and larger startups are searched across the USA and Canada. Every other company is kept only for Ontario jobs. Meta and Tesla block automated readers, so add their postings with Add a job by link.</p>
+        <p className="muted">{curated} company job boards are built in, plus Job Bank Canada for Ontario. They include Amazon, AMD, Apple, Google, Microsoft, Netflix, NVIDIA, OpenAI, Anthropic, SpaceX and Y Combinator-backed hardware companies. Household names such as SpaceX, Apple, NVIDIA and Boeing are searched across the USA and Canada. Other large employers and startups are kept in Canada, and in the USA only for California, Texas, Florida and New York City. Small companies are kept only for Ontario jobs. Meta and Tesla block automated readers, so add their postings with Add a job by link.</p>
         <Coverage state={state} />
         <h3 style={{ marginTop: 16 }}>Add a company</h3>
         <p className="muted small" style={{ marginBottom: 8 }}>Works for companies whose careers page runs on Greenhouse, Lever or Ashby. The board id is the company part of the careers link, e.g. <b>boards.greenhouse.io/<u>acme</u></b> or <b>jobs.lever.co/<u>acme</u></b>.</p>

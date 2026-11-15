@@ -1,9 +1,20 @@
 // Curated job boards, each checked against the live public endpoint on 2026-11-14.
-// big = searched across the USA and Canada: large employers plus larger hardware startups.
+// big = searched in Canada and the USA: large employers plus larger hardware startups.
 // Boards marked false only contribute Ontario jobs.
+// In the USA, only the household names in KNOWN are kept everywhere. Every other employer's US jobs are
+// kept only in California, Texas, Florida and New York City (see checkJob in filter.ts).
 import type { Board } from '../shared/types'
 
 const b = (company: string, ats: Board['ats'], id: string, big = true): Board => ({ company, ats, id, big })
+
+/** Large, very well known employers: their US internships are kept in any state. */
+export const KNOWN = new Set([
+  'SpaceX', 'Anduril', 'Waymo', 'Zoox', 'Neuralink', 'Lucid Motors', 'Rocket Lab', 'Blue Origin', 'Boston Dynamics', 'Figure',
+  'NVIDIA', 'AMD', 'Intel', 'Qualcomm', 'Samsung', 'Cisco', 'Broadcom', 'Micron', 'Applied Materials', 'HP',
+  'Amazon', 'Apple', 'Google', 'Microsoft', 'Netflix', 'OpenAI', 'Anthropic', 'xAI', 'Meta', 'Tesla',
+  'Boeing', 'Northrop Grumman', 'RTX (Collins, Pratt & Whitney, Raytheon)', 'GE Aerospace', 'GE Vernova', 'GE HealthCare', 'L3Harris',
+  'General Motors', 'Ford', 'Honeywell', 'Bosch', 'Caterpillar', '3M', 'Medtronic', 'Shell', 'Chevron', 'Bombardier', 'Magna'
+])
 
 export const BOARDS: Board[] = [
   // Greenhouse
@@ -80,5 +91,31 @@ export const BOARDS: Board[] = [
   b('NFI Group (New Flyer)', 'workable', 'nfi-group-inc'), b('Avidbots', 'bamboohr', 'avidbots', false), b('Miovision', 'ashby', 'miovision', false),
   b('Bruce Power', 'workday', 'brucepower|wd3|BrucePower'), b('Multimatic', 'workday', 'multimatic|wd10|MMEC'), b('BlackBerry', 'workday', 'bb|wd3|BlackBerry'),
   b('Enbridge', 'workday', 'enbridge|wd3|enbridge_careers'), b('TC Energy', 'workday', 'tcenergy|wd3|CAREER_SITE_TC'), b('Zebra Technologies', 'workday', 'zebra|wd501|Zebra_careers'),
-  b('Canadian Natural Resources', 'oracle', 'ehaa.fa.ca2.oraclecloud.com|CNRL-Professional'), b('Samuel, Son & Co.', 'oracle', 'ebct.fa.us2.oraclecloud.com|CX_3002')
+  b('Canadian Natural Resources', 'oracle', 'ehaa.fa.ca2.oraclecloud.com|CNRL-Professional'), b('Samuel, Son & Co.', 'oracle', 'ebct.fa.us2.oraclecloud.com|CX_3002'),
+  // More Canadian employers, each read live through the app's own readers on 2026-11-15
+  b('AtkinsRéalis', 'workday', 'slihrms|wd3|Careers'), b('Canadian Solar', 'workday', 'canadiansolar|wd5|Canadiansolar'),
+  b('Mitel', 'workday', 'mitel|wd3|MitelCareers'), b('Nordion (Sotera Health)', 'workday', 'soterahealth|wd501|External'),
+  b('Sanofi', 'workday', 'sanofi|wd3|SanofiCareers'), b('Stelco', 'workday', 'stelco|wd3|Stelco'), b('ABB', 'workday', 'abb|wd3|External_Career_Page'),
+  b('Canadian Tire', 'workday', 'canadiantirecorporation|wd3|Enterprise_External_Careers_Site'), b('Lumentum', 'workday', 'lumentum|wd5|LITE'),
+  b('Hydro Ottawa', 'workday', 'hydroottawa|wd3|hydro_ottawa_careersite'), b('Airbus', 'workday', 'ag|wd3|Airbus'),
+  b('Air Liquide', 'workday', 'airliquidehr|wd3|AirLiquideExternalCareer'), b('Northland Power', 'workday', 'northlandpower|wd3|ExternalCS'),
+  b('Capital Power', 'workday', 'capitalpower|wd10|External'), b('Cenovus', 'workday', 'cenovus|wd3|Careers'), b('ENMAX', 'workday', 'enmax|wd3|EnmaxCareers'),
+  b('Finning', 'workday', 'finning|wd3|External'), b('Hitachi', 'workday', 'hitachi|wd1|Hitachi'), b('Keyera', 'workday', 'keyera|wd10|Keyera_Careers'),
+  b('Ledcor', 'workday', 'ledcor|wd3|Ledcor_External'), b('Rolls-Royce', 'workday', 'rollsroyce|wd3|Professional'),
+  b('STEMCELL Technologies', 'workday', 'stemcell|wd3|External_Careers'), b('Suncor', 'workday', 'suncor|wd1|Suncor_External'),
+  b('Thales', 'workday', 'thales|wd3|Careers'), b('Apotex', 'successfactors', 'careers.apotex.com'), b('BWXT', 'successfactors', 'careers.bwxt.com'),
+  b('Hydro One', 'successfactors', 'jobs.hydroone.com'), b('Leonardo DRS', 'successfactors', 'careers.leonardodrs.com'),
+  b('Toronto Hydro', 'successfactors', 'jobs.torontohydro.com'), b('Westinghouse', 'successfactors', 'careers.westinghousenuclear.com'),
+  b('Canfor', 'successfactors', 'jobs.canfor.com'), b('FortisBC', 'successfactors', 'careers.fortisbc.com'),
+  b('Gibson Energy', 'successfactors', 'careers.gibsonenergy.com'), b('IMP Aerospace', 'successfactors', 'careers.impgroup.com'),
+  b('Inter Pipeline', 'successfactors', 'iplcareers.jobs.hr.cloud.sap'), b('NOVA Chemicals', 'successfactors', 'jobs.novachem.com'),
+  b('Pembina', 'successfactors', 'careers.pembina.com'), b('Domtar', 'successfactors', 'jobs.domtar.com'), b('Rogers', 'successfactors', 'jobs.rogers.com'),
+  b('SaskPower', 'successfactors', 'jobs.saskpower.com'), b('Telus', 'successfactors', 'careers.telus.com'), b('TransAlta', 'successfactors', 'jobs.transalta.com'),
+  b('Baylis Medical', 'ukg', 'recruiting.ultipro.ca/BAY5002BAYM/JobBoard/15d9dd2e-ab9a-4fd7-a9f6-b561f2b3f3c5', false),
+  b('Cummins', 'oracle', 'fa-espx-saasfaprod1.fa.ocs.oraclecloud.com|CX_1'), b('GHD', 'oracle', 'ejov.fa.ca2.oraclecloud.com|CX'),
+  b('Metrolinx', 'oracle', 'ehtc.fa.ca2.oraclecloud.com|CX_1'), b('Linamar (Skyjack)', 'oracle', 'fa-epmd-saasfaprod1.fa.ocs.oraclecloud.com|CX_3001'),
+  b('Seaspan', 'oracle', 'hckz.fa.us2.oraclecloud.com|CX_1'), b('StandardAero', 'oracle', 'cva.fa.us1.oraclecloud.com|CX_3'),
+  b('Enwave', 'bamboohr', 'enwave', false), b('Giatec', 'bamboohr', 'giatecscientific', false), b('Mission Control', 'bamboohr', 'mcss', false),
+  b('Pleora', 'bamboohr', 'pleora', false), b('Profound Medical', 'bamboohr', 'profoundmedical', false), b('Ranovus', 'bamboohr', 'ranovus', false),
+  b('Syntronic', 'lever', 'syntronic', false), b('Telesat', 'lever', 'telesat')
 ]

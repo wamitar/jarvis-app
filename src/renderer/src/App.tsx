@@ -43,7 +43,7 @@ export function App() {
   return (
     <div className="app">
       <aside className="side">
-        <div className="brand"><i />J.A.R.V.I.S.</div>
+        <div className="brand"><i>J</i>J.A.R.V.I.S.</div>
         <nav className="nav">
           {nav.map(([id, label, count]) => (
             <button key={id} className={page === id ? 'on' : ''} onClick={() => setPage(id)}>{label}<span className="count">{count}</span></button>

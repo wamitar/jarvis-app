@@ -22,8 +22,8 @@ export function normalizeResume(x: any): Resume {
     name: str(x.name),
     contact: { email: str(c.email), phone: str(c.phone), location: str(c.location), linkedin: str(c.linkedin), website: str(c.website) },
     summary: str(x.summary),
-    education: arr(x.education, e => ({ school: str(e.school), degree: str(e.degree), dates: str(e.dates), details: strs(e.details) })),
-    experience: arr(x.experience, e => ({ company: str(e.company), title: str(e.title), location: str(e.location), dates: str(e.dates), bullets: strs(e.bullets) })),
+    education: arr(x.education, e => ({ school: str(e.school), degree: str(e.degree), dates: str(e.dates), location: str(e.location), details: strs(e.details) })),
+    experience: arr(x.experience, e => ({ company: str(e.company), title: str(e.title), location: str(e.location), dates: str(e.dates), bullets: strs(e.bullets), headline: e.headline === 'title' ? 'title' as const : 'company' as const })),
     projects: arr(x.projects, p => ({ name: str(p.name), dates: str(p.dates), tech: str(p.tech), bullets: strs(p.bullets) })),
     skills: arr(x.skills, s => ({ category: str(s.category), items: strs(s.items) })),
     extras: arr(x.extras, s => ({ heading: str(s.heading), items: strs(s.items) }))
@@ -33,7 +33,7 @@ export function normalizeResume(x: any): Resume {
 export const RESUME_SHAPE = `{
   "name": "", "contact": {"email": "", "phone": "", "location": "", "linkedin": "", "website": ""},
   "summary": "",
-  "education": [{"school": "", "degree": "", "dates": "", "details": [""]}],
+  "education": [{"school": "", "degree": "", "dates": "", "location": "", "details": [""]}],
   "experience": [{"company": "", "title": "", "location": "", "dates": "", "bullets": [""]}],
   "projects": [{"name": "", "dates": "", "tech": "", "bullets": [""]}],
   "skills": [{"category": "", "items": [""]}],

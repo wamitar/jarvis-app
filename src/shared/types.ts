@@ -40,8 +40,9 @@ export interface Resume {
   name: string
   contact: { email: string; phone: string; location: string; linkedin: string; website: string }
   summary: string
-  education: { school: string; degree: string; dates: string; details: string[] }[]
-  experience: { company: string; title: string; location: string; dates: string; bullets: string[] }[]
+  education: { school: string; degree: string; dates: string; location?: string; details: string[] }[]
+  // headline = which of company/title is the bold first line of the entry. Text may mark bold as **like this**.
+  experience: { company: string; title: string; location: string; dates: string; bullets: string[]; headline?: 'company' | 'title' }[]
   projects: { name: string; dates: string; tech: string; bullets: string[] }[]
   skills: { category: string; items: string[] }[]
   extras: { heading: string; items: string[] }[]
@@ -68,7 +69,7 @@ export interface Tailored {
 }
 
 export interface RefreshProgress { stage: string; detail: string; done: number; total: number }
-export interface RefreshResult { fetched: number; passed: number; added: number; scored: number; errors: string[] }
+export interface RefreshResult { fetched: number; passed: number; added: number; scored: number; removed: number; errors: string[] }
 
 export interface PrefillResult {
   page: string          // which page of the application this describes
@@ -83,6 +84,7 @@ export interface Settings {
   customBoards: Board[]
   scoreModel: string; writeModel: string
   workdayAutoCreate: boolean   // also tick the agreement box and press Create Account on Workday
+  workdayAutoContinue?: boolean // press Save and Continue between Workday pages (on unless set to false); never Submit
 }
 
 /** What the last "Get jobs" run found at one company. */
@@ -107,7 +109,13 @@ export const defaultSettings = (): Settings => ({
   adzunaAppId: '', adzunaAppKey: '', customBoards: [], scoreModel: 'haiku', writeModel: 'sonnet', workdayAutoCreate: false
 })
 
+/** Removes the **bold** markers used in resume text. */
+export const plain = (s: string): string => s.replace(/\*\*(.+?)\*\*/g, '$1')
+
 export function resumeToText(r: Resume): string {
+  return plain(resumeToMarkedText(r))
+}
+function resumeToMarkedText(r: Resume): string {
   const out: string[] = []
   out.push(r.name)
   out.push([r.contact.email, r.contact.phone, r.contact.location, r.contact.linkedin, r.contact.website].filter(Boolean).join(' | '))

@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, nativeTheme } from 'electron'
 import { join } from 'node:path'
+import { rm } from 'node:fs/promises'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { basename } from 'node:path'
 import type { Job, JobStatus, PrefillResult, Profile, RawJob, RefreshProgress, Resume, Settings, Tailored, Usage, WorkdayLogin } from '../shared/types'
@@ -9,7 +10,8 @@ import * as db from './db'
 import { askJson, findCli, setUsageListener } from './ai/claude'
 import * as keychain from './keychain'
 import { normalizeResume, pdfToText, structureResume } from './resume/parse'
-import { tailorResume, findInventions } from './resume/tailor'
+import { tailorResume, shortenResume, findInventions } from './resume/tailor'
+import { compileLatex, findTectonic, resumeLatex } from './resume/latex'
 import { htmlToPdf, letterHtml, resumeHtml, safeName } from './resume/render'
 import { refreshJobs, scorePending } from './refresh'
 import { allBoards } from './sources'
@@ -138,6 +140,21 @@ function handlers(): void {
     if (!hasResume(base)) throw new Error('Add your resume first, on the Resume page.')
     const profile = db.kvGet('profile', emptyProfile())
     const out = await tailorResume(base, db.kvGet('resumeRaw', ''), job, withCover, profile.extra, settings().writeModel)
+    // Typeset it in the LaTeX template and make sure it is one page; if not, have Claude cut it (twice at most).
+    if (findTectonic(app.getPath('userData'))) {
+      const probe = join(app.getPath('userData'), 'tmp', `fit-${Date.now()}.pdf`)
+      try {
+        let pages = (await compileLatex(resumeLatex(out.resume), probe, app.getPath('userData'))).pages
+        for (let i = 0; i < 2 && pages > 1; i++) {
+          out.resume = await shortenResume(base, out.resume, job, pages, settings().writeModel)
+          pages = (await compileLatex(resumeLatex(out.resume), probe, app.getPath('userData'))).pages
+          out.changes.push('Shortened to fit one page.')
+        }
+        if (pages > 1) out.warnings.unshift(`The resume is still ${pages} pages. Trim it in Edit before saving.`)
+        out.warnings = out.warnings.filter(w => !/^Number not|^Term not/.test(w)).concat(findInventions(base, db.kvGet('resumeRaw', ''), out.resume, job))
+      } catch (e) { out.warnings.unshift(`LaTeX check failed: ${(e as Error).message.slice(0, 160)}`) }
+      finally { for (const ext of ['.pdf', '.tex']) await rm(probe.replace(/\.pdf$/, ext), { force: true }).catch(() => {}) }
+    }
     const prev = db.getTailored(jobId)
     const t: Tailored = { jobId, resume: out.resume, coverLetter: out.coverLetter || prev?.coverLetter || '', changes: out.changes, warnings: out.warnings,
       pdfPath: null, updatedAt: new Date().toISOString() }
@@ -152,7 +169,9 @@ function handlers(): void {
     const root = process.env.IH_USER_DATA ? join(process.env.IH_USER_DATA, 'pdfs') : join(app.getPath('documents'), 'J.A.R.V.I.S')
     const dir = join(root, safeName(`${job.company} - ${job.title}`))
     const who = safeName(clean.name || 'Resume')
-    const { path, pages } = await htmlToPdf(resumeHtml(clean), join(dir, `${who} - Resume.pdf`))
+    // The resume is typeset with the user's LaTeX template (a .tex is saved beside the PDF). Without a LaTeX engine the plain layout is used.
+    const pdfOut = join(dir, `${who} - Resume.pdf`)
+    const { path, pages } = findTectonic(app.getPath('userData')) ? await compileLatex(resumeLatex(clean), pdfOut, app.getPath('userData')) : await htmlToPdf(resumeHtml(clean), pdfOut)
     if (coverLetter.trim()) {
       const c = clean.contact
       await htmlToPdf(letterHtml(clean.name, [c.email, c.phone, c.location].filter(Boolean).join(' | '), coverLetter), join(dir, `${who} - Cover Letter.pdf`))
@@ -182,6 +201,7 @@ function handlers(): void {
     isKnown: tenant => db.kvGet<string[]>('workdayTenants', []).includes(tenant),
     markKnown: tenant => { const t = db.kvGet<string[]>('workdayTenants', []); if (!t.includes(tenant)) db.kvSet('workdayTenants', [...t, tenant]) },
     autoCreate: settings().workdayAutoCreate,
+    autoContinue: settings().workdayAutoContinue !== false,
     onUpdate: (result: PrefillResult) => send('prefillUpdate', { jobId, result })
   })
   h('prefill', (jobId: string) => {

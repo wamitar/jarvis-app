@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Resume } from '../../shared/types'
 
-const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
 const link = (s: string): string => esc(s.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, ''))
 const bullets = (items: string[]): string => (items.length ? `<ul>${items.map(b => `<li>${esc(b)}</li>`).join('')}</ul>` : '')
 

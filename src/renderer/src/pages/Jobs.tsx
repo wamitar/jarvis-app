@@ -41,7 +41,7 @@ export function JobsPage({ state, jobs, selected, setSelected, reload, notify, b
     try {
       const r = await window.api.refresh()
       await reload()
-      setSummary(`Checked ${r.fetched.toLocaleString()} postings. ${r.passed} matched your rules and ${r.added} ${r.added === 1 ? 'is' : 'are'} new. Nothing was sent to Claude: press Score when you want match scores.`)
+      setSummary(`Checked ${r.fetched.toLocaleString()} postings. ${r.passed} matched your rules and ${r.added} ${r.added === 1 ? 'is' : 'are'} new.${r.removed ? ` ${r.removed} older US ${r.removed === 1 ? 'job was' : 'jobs were'} removed for being outside California, Texas, Florida and New York City at a lesser-known employer.` : ''} Nothing was sent to Claude: press Score when you want match scores.`)
       setErrors(r.errors)
     } catch (e) { notify(errText(e), true) }
   }
@@ -199,7 +199,7 @@ function ResumeTab({ job, state, tailored, setTailored, reload, notify, go }: { 
   const save = async (): Promise<void> => {
     if (!draft) return
     setBusy('save')
-    try { const t = await window.api.saveTailored(job.id, draft, letter); setTailored(t); setPages(t.pages); setDirty(false); await reload(); notify('PDF saved in Documents › Internship Hunter.') }
+    try { const t = await window.api.saveTailored(job.id, draft, letter); setTailored(t); setPages(t.pages); setDirty(false); await reload(); notify('PDF and .tex saved in Documents › J.A.R.V.I.S.') }
     catch (e) { notify(errText(e), true) } finally { setBusy('') }
   }
   if (!state.hasResume) return <div className="empty"><h2>Add your resume first</h2><p><a onClick={() => go('resume')}>Go to the Resume page</a> and import your PDF.</p></div>

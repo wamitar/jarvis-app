@@ -707,7 +707,8 @@ async function fillPage(p: Page, job: Job, profile: Profile, resume: Resume, tai
 // ---------------------------------------------------------------------------------------------
 // Workday. Its applications sit behind Apply → a choice of how to start → sign in or create an
 // account → several form pages. The app walks those steps and fills each page as it appears.
-// It still never presses Next or Submit on the application itself.
+// Between pages it presses Save and Continue when nothing required is left empty. It never presses Submit:
+// the button is only pressed when its own text says continue or next, and never on the Review step.
 
 export interface WorkdayHooks {
   /** Email from Settings and password from the Mac Keychain; null when none is stored. */
@@ -715,6 +716,7 @@ export interface WorkdayHooks {
   isKnown(tenant: string): boolean          // an account already exists at this employer's Workday
   markKnown(tenant: string): void
   autoCreate: boolean                        // user opted in: tick the agreement box and press Create Account
+  autoContinue?: boolean                     // press Save and Continue between pages; never Submit
   onUpdate(r: PrefillResult): void           // a later page was filled
 }
 type Args = [Job, Profile, Resume, Tailored | null, string]
@@ -872,8 +874,41 @@ async function workdayStep(p: Page, args: Args, hooks: WorkdayHooks): Promise<Pr
   if (inFlow) hooks.markKnown(tenant)
   const step = await p.locator(wd('progressBarActiveStep')).first().innerText({ timeout: 400 }).catch(() => '')
   const res = await fillCurrentPage(p, job, profile, resume, tailored, model, step ? `Workday: ${step.replace(/\s+/g, ' ').replace(/^current step \d+ of \d+/i, '').trim()}` : 'Workday page')
-  if (inFlow) res.note = 'Check this page, finish what is left for you, then press Save and Continue. The next page is filled when it appears. Submit is always yours.'
+  if (inFlow) {
+    res.note = 'Check this page, finish what is left for you, then press Save and Continue. The next page is filled when it appears. Submit is always yours.'
+    if (hooks.autoContinue !== false) await pressContinue(p, res)
+  }
   return res
+}
+
+const NEXT_BTN = `${wd('pageFooterNextButton')}, ${wd('bottom-navigation-next-button')}`
+const CONTINUE_TEXT = /^(save\s*(and|&)\s*continue|continue|next)$/i
+
+/**
+ * Presses Workday's Save and Continue once a page is filled. It refuses on the Review step, when the button says
+ * anything other than continue or next (the same button becomes Submit on the last page), and while a required
+ * field is still empty. If Workday rejects the page, its message is passed on and the page is left for the user.
+ */
+async function pressContinue(p: Page, res: PrefillResult): Promise<void> {
+  const step = (await p.locator(wd('progressBarActiveStep')).first().innerText({ timeout: 400 }).catch(() => '')).replace(/\s+/g, ' ')
+  if (/review|submit/i.test(step)) { res.note = 'This is the Review page. Read it through, then press Submit yourself.'; return }
+  const empty = res.skipped.filter(s => /required, still empty/.test(s))
+  if (empty.length) { res.note = `Not pressing Save and Continue: ${empty.length} required ${empty.length === 1 ? 'field is' : 'fields are'} still empty. Fill ${empty.length === 1 ? 'it' : 'them'} in, then press Save and Continue yourself or "Fill this page again".`; return }
+  const btn = p.locator(NEXT_BTN).first()
+  if (!(await btn.isVisible().catch(() => false))) { res.note = 'Could not find the Save and Continue button on this page. Press it yourself; the next page is filled when it appears.'; return }
+  const text = (await btn.innerText().catch(() => '')).replace(/\s+/g, ' ').trim()
+  if (!CONTINUE_TEXT.test(text)) { res.note = /submit/i.test(text) ? 'This is the last page. Check it, then press Submit yourself.' : `The button here says "${text}", so the app left it for you.`; return }
+  const before = await signature(p)
+  await btn.scrollIntoViewIfNeeded().catch(() => {})
+  const overlay = btn.locator('xpath=..').locator(wd('click_filter')).first()
+  if (await overlay.isVisible().catch(() => false)) await overlay.click(); else await btn.click()
+  for (let i = 0; i < 24; i++) {
+    await p.waitForTimeout(500)
+    if ((await signature(p)) !== before) { res.filled.push('Pressed Save and Continue'); res.note = 'Pressed Save and Continue. The next page is filled when it appears. Submit is always yours.'; return }
+  }
+  const err = await wdError(p)
+  res.note = err ? `Pressed Save and Continue, but Workday did not accept the page: "${err}". Fix what it points to, then press Save and Continue yourself.`
+    : 'Pressed Save and Continue, but the page did not move on. Check it for anything marked in red, then press Save and Continue yourself.'
 }
 
 /** Fills each new Workday page as it appears, until the browser closes, another run starts, or 45 minutes pass. */
@@ -929,4 +964,4 @@ export async function fillAgain(args: Args, hooks: WorkdayHooks): Promise<Prefil
 }
 
 /** For tests: fill whatever page is open, without the Workday walk. */
-export const _test = { prefill, closeBrowser,  collectAll, fillCurrentPage, bestOption, workdayStep, pickInCombobox, visibleOptions }
+export const _test = { pressContinue, prefill, closeBrowser,  collectAll, fillCurrentPage, bestOption, workdayStep, pickInCombobox, visibleOptions }
