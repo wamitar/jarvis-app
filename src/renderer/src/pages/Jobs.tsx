@@ -41,7 +41,7 @@ export function JobsPage({ state, jobs, selected, setSelected, reload, notify, b
     try {
       const r = await window.api.refresh()
       await reload()
-      setSummary(`Checked ${r.fetched.toLocaleString()} postings. ${r.passed} matched your rules and ${r.added} ${r.added === 1 ? 'is' : 'are'} new.${r.removed ? ` ${r.removed} older US ${r.removed === 1 ? 'job was' : 'jobs were'} removed for being outside California, Texas, Florida and New York City at a lesser-known employer.` : ''} Nothing was sent to Claude: press Score when you want match scores.`)
+      setSummary(`Checked ${r.fetched.toLocaleString()} postings. ${r.passed} matched your rules and ${r.added} ${r.added === 1 ? 'is' : 'are'} new.${r.removed ? ` ${r.removed} older ${r.removed === 1 ? 'job was' : 'jobs were'} removed because ${r.removed === 1 ? 'it no longer fits' : 'they no longer fit'} your rules (location, U.S. persons only, or term length).` : ''} Nothing was sent to Claude: press Score when you want match scores.`)
       setErrors(r.errors)
     } catch (e) { notify(errText(e), true) }
   }
@@ -245,7 +245,8 @@ function ApplyTab({ job, ownPdf, tailored, setStatus, notify, goResume }: { job:
   }
   return (
     <div>
-      {!tailored?.pdfPath && (ownPdf
+      {tailored && !tailored.pdfPath && <div className="banner info"><span>Your tailored resume{tailored.coverLetter ? ' and cover letter' : ''} will be saved as PDF and attached when you press Pre-fill.</span></div>}
+      {!tailored && (ownPdf
         ? <div className="banner info"><span>No tailored resume for this job, so your own resume ({ownPdf}) will be attached.</span><button className="btn sm" onClick={goResume}>Tailor resume</button></div>
         : <div className="banner warn"><span>No resume PDF to attach: tailor one for this job, or add your PDF on the Resume page.</span><button className="btn sm" onClick={goResume}>Tailor resume</button></div>)}
       <p className="muted" style={{ marginBottom: 12 }}>The app opens the application in a Chrome window, types in your profile, attaches the tailored PDF and drafts answers to written questions. It never presses Submit, and CAPTCHAs are yours to do.{job.source === 'workday' && ' This one is on Workday: the app presses Apply, signs in or fills the account page with the login saved in Settings, then fills each page as you move through it.'}</p>

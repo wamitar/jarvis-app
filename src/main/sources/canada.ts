@@ -35,7 +35,7 @@ export async function fetchSuccessFactors(b: Board): Promise<RawJob[]> {
           if (ca) loc = `${slug.split('-')[0]}, ${ca[1]}, CA`; else if (us) loc = `${slug.split('-')[0]}, ${us[1]}, US`
         }
         const date = new Date(htmlToText(row.match(/class="jobDate"[^>]*>\s*([^<]+)</)?.[1] || ''))
-        const url = `https://${b.id}${path}`
+        const url = `https://${b.id}${decodeEntities(path)}`
         seen.set(postId, {
           id: `successfactors:${b.id}:${postId}`, source: 'successfactors', company: b.company, title: decodeEntities(htmlToText(link[2])),
           location: loc.replace(/,\s*CA$/, ', Canada').replace(/,\s*US$/, ', USA'), url, applyUrl: url, description: '',

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { AppState } from '../../shared/api'
-import type { Job, RefreshProgress, Usage } from '../../shared/types'
+import type { Activity, Job, RefreshProgress, Usage } from '../../shared/types'
 import { JobsPage } from './pages/Jobs'
 import { TrackerPage } from './pages/Tracker'
 import { ResumePage } from './pages/ResumePage'
@@ -21,6 +21,7 @@ export function App() {
   const [progress, setProgress] = useState<RefreshProgress | null>(null)
   const [toast, setToast] = useState<{ msg: string; err: boolean } | null>(null)
   const [usage, setUsage] = useState<Usage>({ calls: 0, input: 0, output: 0 })
+  const [activity, setActivity] = useState<Activity>({ working: false, stopping: false, tasks: [] })
 
   const reload = useCallback(async () => {
     const [s, j] = await Promise.all([window.api.getState(), window.api.listJobs()])
@@ -30,11 +31,22 @@ export function App() {
 
   useEffect(() => {
     reload().then(async () => { const s = await window.api.getState(); if (!s.hasResume) setPage('resume') })
-    const a = window.api.onProgress(setProgress), b = window.api.onUsage(setUsage)
-    return () => { a(); b() }
+    const a = window.api.onProgress(setProgress), b = window.api.onUsage(setUsage), c = window.api.onActivity(setActivity)
+    window.api.getActivity().then(setActivity)
+    return () => { a(); b(); c() }
   }, [reload])
 
+  const stop = async (): Promise<void> => {
+    setActivity(await window.api.stopAll())
+    notify('Stopped. Anything half-done was left as it is; the application browser stays open.')
+    reload()
+  }
+
   if (!state) return null
+  // The task named in the light is the most specific one running; a Claude call inside a bigger task is shown as part of it.
+  const main = activity.tasks.filter(t => t !== 'Waiting for Claude')
+  const task = main[main.length - 1] || activity.tasks[0] || ''
+  const withClaude = activity.tasks.includes('Waiting for Claude') && task !== 'Waiting for Claude'
   const active = jobs.filter(j => j.status !== 'hidden')
   const tracked = jobs.filter(j => ['applied', 'interview', 'offer', 'rejected'].includes(j.status)).length
   const openJob = (id: string): void => { setSelected(id); setPage('jobs') }
@@ -50,6 +62,11 @@ export function App() {
           ))}
         </nav>
         <div className="foot">
+          <div className={'status' + (activity.working ? ' on' : '')} role="status">
+            <div className="state"><span className="lamp" />{activity.stopping ? 'Stopping…' : activity.working ? 'Working' : 'Idle'}</div>
+            {activity.working && <div className="what">{task}{withClaude ? ' (waiting for Claude)' : ''}</div>}
+            {activity.working && <button className="kill" onClick={stop} disabled={activity.stopping} title="Ends Claude calls, form filling, the application watcher and job fetching. The application browser is left open.">Stop everything</button>}
+          </div>
           <div><span className={'dot' + (state.cliFound ? '' : ' off')} />{state.cliFound ? 'Claude account connected' : 'Claude Code not found'}</div>
           <div className="usage" title="Totals since you started using the app. Input includes the instructions and resume sent with every call.">
             <div className="num"><b>{fmt(usage.input + usage.output)}</b> tokens used</div>

@@ -1,4 +1,4 @@
-import type { Job, JobStatus, PrefillResult, Profile, RefreshProgress, RefreshResult, Resume, Settings, Tailored, Board, Coverage, Usage, WorkdayLogin } from './types'
+import type { Job, JobStatus, PrefillResult, Profile, RefreshProgress, RefreshResult, Resume, Settings, Tailored, Board, Coverage, Usage, WorkdayLogin, Activity } from './types'
 
 export interface AppState {
   resume: Resume; hasResume: boolean; profile: Profile; settings: Settings
@@ -29,10 +29,13 @@ export interface Api {
   prefill(jobId: string): Promise<PrefillResult>
   fillAgain(jobId: string): Promise<PrefillResult>
   openExternal(url: string): Promise<void>
+  getActivity(): Promise<Activity>
+  stopAll(): Promise<Activity>
+  onActivity(fn: (a: Activity) => void): () => void
   onProgress(fn: (p: RefreshProgress | null) => void): () => void
   onUsage(fn: (u: Usage) => void): () => void
   onPrefillUpdate(fn: (u: { jobId: string; result: PrefillResult }) => void): () => void
 }
 
 export const CHANNELS = ['getState', 'importResume', 'chooseResumePdf', 'revealResumePdf', 'saveResume', 'saveProfile', 'saveSettings', 'listJobs', 'getJob', 'updateJob', 'refresh',
-  'score', 'rescore', 'setWorkdayLogin', 'clearWorkdayLogin', 'addJob', 'tailor', 'saveTailored', 'revealPdf', 'prefill', 'fillAgain', 'openExternal'] as const
+  'score', 'rescore', 'setWorkdayLogin', 'clearWorkdayLogin', 'addJob', 'tailor', 'saveTailored', 'revealPdf', 'prefill', 'fillAgain', 'openExternal', 'getActivity', 'stopAll'] as const

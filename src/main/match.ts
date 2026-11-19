@@ -1,6 +1,7 @@
 import type { Job, Profile, Resume } from '../shared/types'
 import { resumeToText } from '../shared/types'
 import { askJson } from './ai/claude'
+import { checkStop } from './activity'
 
 interface Scored { id: string; score: number; reasons: string[]; missing: string[] }
 
@@ -10,6 +11,7 @@ export async function scoreJobs(jobs: Job[], resume: Resume, profile: Profile, m
   onBatch: (scored: Scored[], done: number, total: number) => void): Promise<number> {
   let done = 0
   for (let i = 0; i < jobs.length; i += BATCH) {
+    checkStop()
     const batch = jobs.slice(i, i + BATCH)
     const listing = batch.map((j, n) =>
       `<job n="${n}">\nTitle: ${j.title}\nCompany: ${j.company}\nLocation: ${j.location}\n${j.description.slice(0, 1800)}\n</job>`).join('\n')

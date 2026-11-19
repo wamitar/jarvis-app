@@ -56,7 +56,12 @@ export interface Profile {
   citizenship: string; workAuthCanada: string; workAuthUsa: string; needsSponsorship: string
   availability: string; termLength: string; willingToRelocate: string
   extra: string         // free-form facts Claude may use for screening answers
+  moreProjects: Resume['projects']   // projects not on the resume; tailoring picks whichever fit a posting best
+  moreSkills: string    // software and skills the candidate has beyond the resume; tailoring may list them
 }
+
+/** What the app is doing right now (sidebar status light). */
+export interface Activity { working: boolean; stopping: boolean; tasks: string[] }
 
 export interface Tailored {
   jobId: string
@@ -66,6 +71,7 @@ export interface Tailored {
   warnings: string[]
   pdfPath: string | null
   updatedAt: string
+  coverPdfPath?: string | null   // set only while applying: the cover letter PDF to attach, when there is one
 }
 
 export interface RefreshProgress { stage: string; detail: string; done: number; total: number }
@@ -102,7 +108,7 @@ export const emptyProfile = (): Profile => ({
   firstName: '', lastName: '', email: '', phone: '', address: '', city: '', province: '', postalCode: '', country: 'Canada',
   linkedin: '', website: '', github: '', school: '', degree: '', major: 'Mechanical Engineering', gpa: '',
   graduation: '', citizenship: '', workAuthCanada: '', workAuthUsa: '', needsSponsorship: '', availability: '',
-  termLength: '', willingToRelocate: '', extra: ''
+  termLength: '', willingToRelocate: '', extra: '', moreProjects: [], moreSkills: ''
 })
 
 export const defaultSettings = (): Settings => ({

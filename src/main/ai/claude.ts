@@ -7,6 +7,7 @@ import { join } from 'node:path'
 
 let cliPath: string | null = null
 import type { Usage } from '../../shared/types'
+import { begin, checkStop, onStop, StoppedError } from '../activity'
 let usage: Usage = { calls: 0, input: 0, output: 0 }
 let onUsage: (u: Usage) => void = () => {}
 
@@ -42,12 +43,15 @@ function runCli(prompt: string, model: string, timeoutMs: number): Promise<strin
       '--strict-mcp-config', '--no-session-persistence', '--system-prompt', SYSTEM],
       { cwd: tmpdir(), env, stdio: ['pipe', 'pipe', 'pipe'] })
     let out = '', err = ''
+    const end = begin('Waiting for Claude')
+    // The stop switch ends the call at once.
+    const off = onStop(() => { child.kill('SIGKILL'); reject(new StoppedError()) })
     const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('Claude took too long to answer.')) }, timeoutMs)
     child.stdout.on('data', d => (out += d))
     child.stderr.on('data', d => (err += d))
-    child.on('error', e => { clearTimeout(timer); reject(e) })
+    child.on('error', e => { clearTimeout(timer); off(); end(); reject(e) })
     child.on('close', () => {
-      clearTimeout(timer)
+      clearTimeout(timer); off(); end()
       try {
         const j = JSON.parse(out)
         const u = j.usage || {}
@@ -80,9 +84,11 @@ export async function askJson<T>(prompt: string, opts: { model?: string; timeout
   const timeoutMs = opts.timeoutMs ?? 240_000
   let lastErr: unknown
   for (let attempt = 0; attempt < 2; attempt++) {
+    checkStop()
     usage.calls++; onUsage({ ...usage })
     const text = await runCli(attempt === 0 ? prompt : prompt + '\n\nYour last reply was not valid JSON. Reply with valid JSON only.', model, timeoutMs)
     try { return extractJson(text) as T } catch (e) { lastErr = e }
+    checkStop()
   }
   throw new Error('Claude did not return valid JSON: ' + String(lastErr))
 }

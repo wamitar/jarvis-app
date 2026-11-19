@@ -2,6 +2,7 @@
 // Every control on the page is read (text, dropdowns, radio groups, tick boxes, searchable pickers),
 // Claude decides every answer it can infer from the profile, resume and posting, and the app types
 // them in. It never clicks Submit and never solves CAPTCHAs: those stay with the user.
+import { begin, checkStop, isStopping } from '../activity'
 import { chromium, type BrowserContext, type Frame, type Locator, type Page } from 'playwright-core'
 import type { Job, PrefillResult, Profile, Resume, Tailored } from '../../shared/types'
 import { resumeToText } from '../../shared/types'
@@ -186,6 +187,8 @@ function collectFields(startIdx: number): Field[] {
         const picked = Array.from(p.querySelectorAll('[data-automation-id="selectedItem"], [class*="singleValue" i], [class*="multiValue" i], [class*="single-value" i]')).map(x => clean(x.textContent)).filter(Boolean)
         if (picked.length) shown = picked.join('; ')
       }
+      // Other pickers (SuccessFactors) keep the chosen text in the box itself; its placeholder entry counts as empty.
+      if (!shown && input.value && !/^(no selection|none selected|select( one)?|please select.*)$/i.test(input.value.trim())) shown = clean(input.value)
       const multi = !!el.closest('[data-automation-id="multiselectInputContainer"]') && /skill/i.test(l.text)
       push({ kind: 'combobox', inputType: 'combobox', label: l.text, question: '', section, name, required, value: shown, options: [], maxLength: 0, multi }, [el])
       continue
@@ -262,7 +265,8 @@ const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9+]+/g, ' ')
 function bestOption(options: string[], want: string): number {
   const w = norm(want)
   if (!w) return -1
-  const n = options.map(norm)
+  // Placeholder entries ("No Selection", "Select one") are never a match: "No" must not pick "No Selection".
+  const n = options.map(o => (PLACEHOLDER.test(o.trim()) ? '' : norm(o)))
   let i = n.indexOf(w); if (i >= 0) return i
   i = n.findIndex(o => o.startsWith(w + ' ') || w.startsWith(o + ' ')); if (i >= 0) return i
   i = n.findIndex(o => (` ${o} `).includes(` ${w} `)); if (i >= 0) return i
@@ -276,6 +280,7 @@ function bestOption(options: string[], want: string): number {
   n.forEach((o, k) => { const s = o.split(' ').filter(t => ww.has(t)).length / Math.max(ww.size, 1); if (s > score) { score = s; best = k } })
   return score >= (key.length ? 0.5 : 1) ? best : -1
 }
+const PLACEHOLDER = /^(no selection|none selected|select|select one|select an option|select\.\.\.|please select.*|choose( one| an option)?\.*|-+|—+)$/i
 const GENERIC = new Set(['engineering', 'engineer', 'science', 'sciences', 'studies', 'technology', 'management', 'degree', 'of', 'in', 'and', 'the', 'a', 'for', 'to', 'or', 'general', 'other', 'applied'])
 
 /** Types like a person (focus, select all, keystrokes, blur) so React-based forms such as Workday register it. */
@@ -338,8 +343,18 @@ async function pickInCombobox(frame: Frame, loc: Locator, value: string, workday
   if (workday) await loc.press('Enter').catch(() => {})
   await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 4000 }).catch(() => {})
   await frame.page().waitForTimeout(workday ? 900 : 300)
-  let shown = await visibleOptions(frame)
+  let shown = await settledOptions(frame, value, workday)
   let picked = await clickOption(frame, value)
+  // Workday's search can come back empty for a full phrase ("Mechanical Engineering") yet find it by its key word.
+  const keyWords = norm(value).split(' ').filter(t => !GENERIC.has(t) && t.length > 2)
+  if (!picked && workday && keyWords.length && keyWords.join(' ') !== norm(value)) {
+    await clearSearch(loc)
+    await loc.pressSequentially(keyWords[0], { delay: 25 })
+    await loc.press('Enter').catch(() => {})
+    await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 4000 }).catch(() => {})
+    shown = await settledOptions(frame, value, true)
+    picked = await clickOption(frame, value)
+  }
   if (!picked) {
     // Search text did not match an option: clear it and pick from the full list instead.
     await clearSearch(loc)
@@ -359,9 +374,25 @@ async function pickInCombobox(frame: Frame, loc: Locator, value: string, workday
     const isSubList = sub.length > 0 && !sub.includes(picked) && !sub.some(o => shown.includes(o))
     if (isSubList) { const second = await clickOption(frame, value) || (await frame.locator(OPT + ':visible').first().click().then(() => sub[0]).catch(() => null)); if (second) picked += ' › ' + second }
   }
-  if (!picked) await clearSearch(loc)
+  if (!picked) { lastSeen = shown.slice(0, 8); await clearSearch(loc) }
   await frame.page().keyboard.press('Escape').catch(() => {})
   return picked
+}
+/** The options on screen the last time a picker found no match, so the report can say what the list offered. */
+let lastSeen: string[] = []
+
+/** Waits for a picker's results to stop changing (Workday loads them after the search), up to about 6 seconds. */
+async function settledOptions(frame: Frame, want: string, workday: boolean): Promise<string[]> {
+  let prev = await visibleOptions(frame)
+  if (!workday) return prev
+  for (let i = 0; i < 14; i++) {
+    if (bestOption(prev, want) >= 0) return prev
+    await frame.page().waitForTimeout(400)
+    const now = await visibleOptions(frame)
+    if (i >= 4 && now.length && now.join('|') === prev.join('|')) return now
+    prev = now
+  }
+  return prev
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -396,6 +427,7 @@ const RULES: Rule[] = [
   [/province|\bstate\b/i, p => p.province],
   [/country/i, p => p.country]
 ]
+const STUDY = /field of study|\bmajor\b|discipline|area of study|program of study|specialization/i
 const NEVER = /robots only|for robots|honeypot|leave (this|it) (field )?(blank|empty)|do not (fill|enter|complete)|password|captcha|social (security|insurance)|\bssn\b|\bsin\b|passport|driver'?s? licen[cs]e number|bank|credit card/i
 
 function ruleAnswer(f: Field, profile: Profile, job: Job): string {
@@ -447,6 +479,8 @@ How to answer:
 - AI screening, AI interviews or automated/AI evaluation of the application: answer No (opt out) whenever the form offers the choice.
 - "Have you worked for / been employed by this company before?", "Are you related to an employee?", non-compete or "Have you been convicted" style questions: answer No unless the facts say otherwise.
 - "How did you hear about us?": always the company's careers website. Pick the option closest to that ("Careers Website", "Company Website", "Corporate Website", "Career Site"); for a free-text box write "Company careers website". Only if no such option exists, pick a job board.
+- Field of study, major or discipline: always the major in candidate_facts. With options, pick that exact discipline or the option that names it (never a different engineering discipline such as aerospace); if none names it, leave the field out. Without options, search for the major's exact name.
+- Never answer with a placeholder option such as "No Selection" or "Select one". If no real option fits an optional question, leave that field out.
 - "Highest level of education completed": the candidate has NOT finished a degree yet; pick high school / secondary (or the closest "some college / currently enrolled" option). A question about the degree being pursued gets the bachelor's degree.
 - Age questions ("Are you 18 or older?"): Yes, the candidate is a university student.
 - Willing to relocate / travel / work on site: Yes for this internship unless the facts say otherwise.
@@ -583,6 +617,7 @@ async function applyAnswer(x: Located, value: Answer['value'], workday: boolean,
       return
     }
     case 'combobox': {
+      if (PLACEHOLDER.test(text.trim())) return   // Claude chose to leave it unset
       const items = Array.isArray(value) ? value.map(String) : f.multi ? text.split(/,|;/).map(s => s.trim()).filter(Boolean) : [text]
       const picked: string[] = []
       for (const it of items.filter(i => i.trim()).slice(0, 15)) {
@@ -590,7 +625,7 @@ async function applyAnswer(x: Located, value: Answer['value'], workday: boolean,
         if (got) picked.push(got)
       }
       if (picked.length) res.filled.push(`${label}: ${picked.join(', ')}`)
-      else if (items.some(i => i.trim())) res.skipped.push(`${label} (could not find "${items[0].slice(0, 40)}" in the list)`)
+      else if (items.some(i => i.trim())) res.skipped.push(`${label} (could not find "${items[0].slice(0, 40)}" in the list${lastSeen.length ? `; it offered: ${lastSeen.map(o => o.slice(0, 30)).join(', ')}` : ''})`)
       return
     }
     default: return
@@ -603,6 +638,7 @@ async function attachFiles(fields: Located[], tailored: Tailored | null, res: Pr
   const already = page0 ? await page0.locator('[data-automation-id="file-upload-successful"], [data-automation-id="fileUploadSuccessMessage"]').count().catch(() => 0) +
     (/successfully uploaded/i.test(await page0.locator('body').innerText().catch(() => '')) ? 1 : 0) : 0
   let resumeDone = already > 0
+  let coverDone = false
   for (const { frame, f } of fields.filter(x => x.f.kind === 'file')) {
     const key = `${f.label} ${f.name}`
     const isCover = /cover/i.test(key)
@@ -611,6 +647,11 @@ async function attachFiles(fields: Located[], tailored: Tailored | null, res: Pr
         await frame.locator(`[data-ih-idx="${f.idx}"]`).first().setInputFiles(tailored.pdfPath)
         resumeDone = true; res.filled.push('Resume PDF attached')
       } catch (e) { res.skipped.push(`Resume upload (${(e as Error).message.split('\n')[0].slice(0, 60)})`) }
+    } else if (isCover && !coverDone && tailored?.coverPdfPath) {
+      try {
+        await frame.locator(`[data-ih-idx="${f.idx}"]`).first().setInputFiles(tailored.coverPdfPath)
+        coverDone = true; res.filled.push('Cover letter PDF attached')
+      } catch (e) { res.skipped.push(`Cover letter upload (${(e as Error).message.split('\n')[0].slice(0, 60)})`) }
     } else if (f.required) res.skipped.push(`${short(f)} (file upload)`)
   }
 }
@@ -671,8 +712,30 @@ async function fillPage(p: Page, job: Job, profile: Profile, resume: Resume, tai
   const res = blank(label)
   const workday = isWorkdayUrl(p.url())
   const attempted = new Set<string>()
+  // Some forms (SuccessFactors) open with every section folded shut, which hides all the fields.
+  const expand = p.locator('button:visible, a:visible, [role="button"]:visible').filter({ hasText: /^\s*expand all( sections)?\s*$/i }).first()
+  if (await expand.isVisible().catch(() => false)) { await expand.click().catch(() => {}); await p.waitForTimeout(2500); res.filled.push('Opened all sections') }
   let fields = await collectAll(p)
   if (workday && /experience/i.test(label) && (await addWorkdayBlocks(p, fields, resume, res))) fields = await collectAll(p)
+  // Workday's own resume reader sometimes fills the field of study with a different discipline. Where the chosen
+  // value does not match the major in the profile, it is removed so the right one is picked below.
+  if (workday && profile.major.trim()) {
+    const key = norm(profile.major).split(' ').filter(t => !GENERIC.has(t))
+    let cleared = false
+    for (const x of fields) {
+      if (x.f.kind !== 'combobox' || !STUDY.test(`${x.f.label} ${x.f.question}`) || !x.f.value.trim()) continue
+      const v = ` ${norm(x.f.value)} `
+      if (!key.length || key.every(k => v.includes(` ${k} `))) continue
+      const loc = x.frame.locator(`[data-ih-idx="${x.f.idx}"]`).first()
+      await loc.focus().catch(() => {})
+      await clearSearch(loc)
+      await loc.press('Backspace').catch(() => {})   // on an empty Workday picker, Backspace removes the chosen item
+      await closeLists(x.frame)
+      res.filled.push(`${short(x.f)}: removed "${x.f.value.slice(0, 40)}" (your profile says ${profile.major})`)
+      cleared = true
+    }
+    if (cleared) { await p.waitForTimeout(600); fields = await collectAll(p) }
+  }
   await attachFiles(fields, tailored, res)
   if (tailored?.pdfPath && fields.some(x => x.f.kind === 'file')) { await p.waitForTimeout(1500); fields = await collectAll(p) }   // uploads can autofill and re-render
 
@@ -691,6 +754,7 @@ async function fillPage(p: Page, job: Job, profile: Profile, resume: Resume, tai
       answers = new Map(todo.map(x => [x.f.idx, ruleAnswer(x.f, profile, job)]))
     }
     for (const x of todo) {
+      checkStop()
       attempted.add(x.key)
       const v = answers.get(x.f.idx)
       if (v === undefined || v === '' || v === false || (Array.isArray(v) && !v.length)) continue
@@ -730,7 +794,7 @@ export interface WorkdayHooks {
 }
 type Args = [Job, Profile, Resume, Tailored | null, string]
 
-// The stored password is only ever typed on Workday's own domains.
+// Workday's own domains. (The saved login is also used on other job sites' sign-in forms: see siteSignIn.)
 const WD_HOST = /\.(myworkdayjobs|myworkdaysite)\.com$/i
 const testHost = process.env.IH_USER_DATA ? process.env.IH_WD_TEST_HOST : undefined
 const hostOf = (u: string): string => { try { return new URL(u).hostname } catch { return '' } }
@@ -804,7 +868,7 @@ async function authStep(p: Page, tenant: string, hooks: WorkdayHooks): Promise<P
   const res = blank('Workday sign-in')
   const login = await hooks.getLogin()
   if (!login) {
-    res.note = 'This employer uses Workday, which needs an account. Save your Workday email and password in Settings › Workday account and press "Fill this page again", or sign in yourself in the browser.'
+    res.note = 'This employer uses Workday, which needs an account. Save your email and password in Settings › Job site login and press "Fill this page again", or sign in yourself in the browser.'
     return res
   }
   let creating = await seen(p, wd('verifyPassword'))
@@ -828,7 +892,7 @@ async function authStep(p: Page, tenant: string, hooks: WorkdayHooks): Promise<P
   await typeInto(p.locator(wd('verifyPassword')).first(), login.password, true)
   res.filled.push('Email', 'Password', 'Confirm password')
   if (!hooks.autoCreate) {
-    res.note = 'Tick the agreement box if there is one, then press Create Account. The app carries on once you are in. To have it press Create Account too, turn that on in Settings › Workday account.'
+    res.note = 'Tick the agreement box if there is one, then press Create Account. The app carries on once you are in. To have it press Create Account too, turn that on in Settings › Job site login.'
     return res
   }
   const box = p.locator(wd('createAccountCheckbox')).first()
@@ -907,6 +971,7 @@ async function pressContinue(p: Page, res: PrefillResult): Promise<void> {
   if (!(await btn.isVisible().catch(() => false))) { res.note = 'Could not find the Save and Continue button on this page. Press it yourself; the next page is filled when it appears.'; return }
   const text = (await btn.innerText().catch(() => '')).replace(/\s+/g, ' ').trim()
   if (!CONTINUE_TEXT.test(text)) { res.note = /submit/i.test(text) ? 'This is the last page. Check it, then press Submit yourself.' : `The button here says "${text}", so the app left it for you.`; return }
+  checkStop()
   const before = await signature(p)
   await btn.scrollIntoViewIfNeeded().catch(() => {})
   const overlay = btn.locator('xpath=..').locator(wd('click_filter')).first()
@@ -923,10 +988,12 @@ async function pressContinue(p: Page, res: PrefillResult): Promise<void> {
 /** Fills each new Workday page as it appears, until the browser closes, another run starts, or 45 minutes pass. */
 async function watchWorkday(p: Page, args: Args, hooks: WorkdayHooks): Promise<void> {
   const token = ++watchToken
+  const end = begin('Watching the application for the next page')
+  try {
   const done = new Set<string>()
   const authTries = new Map<string, number>()
   const until = Date.now() + 45 * 60_000
-  while (token === watchToken && !p.isClosed() && Date.now() < until) {
+  while (token === watchToken && !p.isClosed() && Date.now() < until && !isStopping()) {
     try {
       const sig = isWorkdayUrl(p.url()) ? await signature(p) : ''
       // A sign-in page that is still showing after a try gets another go (up to three), so one slow login never stalls the run.
@@ -945,6 +1012,213 @@ async function watchWorkday(p: Page, args: Args, hooks: WorkdayHooks): Promise<v
       await p.waitForTimeout(1500)
     } catch { if (p.isClosed()) break; await new Promise(r => setTimeout(r, 1500)) }
   }
+  } finally { end() }
+}
+/** Ends the Workday page watcher (the stop switch). The browser stays open. */
+export function stopWatching(): void { watchToken++ }
+
+// ---------------------------------------------------------------------------------------------
+// SuccessFactors. The job page only has an "Apply now" control; the form sits behind it and behind
+// that employer's own account. The app presses Apply, signs in with the saved login (see siteSignIn), then
+// fills the application when it appears. It never presses Submit.
+
+const SF_APPLY = 'a.dialogApply, a[href*="/talentcommunity/apply/"], button[href*="/talentcommunity/apply/"]'
+/** The visible Apply control on a SuccessFactors job page (hidden copies exist for other screen sizes). */
+const sfApply = (p: Page): Locator => p.locator(SF_APPLY).locator('visible=true').first()
+const isSuccessFactorsJobPage = (p: Page): Promise<boolean> => sfApply(p).isVisible().catch(() => false)
+/** SuccessFactors job links look like /job/<slug>/<number>/; the Apply control can take a moment to appear. */
+const waitForSuccessFactorsJobPage = async (p: Page): Promise<boolean> =>
+  /\/job\/[^?#]*\/\d{6,}\/?([?#]|$)/.test(p.url()) ? sfApply(p).waitFor({ state: 'visible', timeout: 6000 }).then(() => true).catch(() => false) : isSuccessFactorsJobPage(p)
+const latestPage = (p: Page): Page => { const open = (context?.pages() || []).filter(x => !x.isClosed()); return open[open.length - 1] || p }
+
+async function successFactorsApply(p: Page): Promise<PrefillResult> {
+  const res = blank('Job page')
+  if (await p.locator('#cookie-acknowledge').first().click({ timeout: 1500 }).then(() => true).catch(() => false)) await p.waitForTimeout(1200)
+  const from = p.url()
+  // The click can be lost while the page is still settling, so it is tried twice.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await sfApply(p).click({ timeout: 5000 }).catch(() => {})
+    // Some employers open a small menu ("Apply Now" / "Start applying with LinkedIn").
+    const item = p.locator('.dropdown-menu a:visible, ul[role="menu"] a:visible').filter({ hasText: /^\s*apply now\s*$/i }).first()
+    if (await item.isVisible({ timeout: 1500 }).catch(() => false)) await item.click().catch(() => {})
+    let moved = false
+    for (let i = 0; i < 16 && !moved; i++) { await p.waitForTimeout(500); const now = latestPage(p); moved = now !== p || now.url() !== from }
+    if (moved) break
+  }
+  res.filled.push('Pressed Apply now')
+  res.note = 'Opening the application. This employer uses SuccessFactors, which needs an account: the app signs in with your saved login, then fills the form.'
+  return res
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sign-in on any other job site. The user chose to use the one saved login everywhere, so when an
+// application shows a sign-in form the app types the saved email and password and presses Sign In.
+// It only does this over https, once per site, and never again on a site that rejected the login
+// (repeated failures can lock an account). On a create-account form it fills the fields and leaves
+// the button, and any terms box, to the user.
+
+const siteRejected = new Set<string>()
+const siteTried = new Set<string>()
+const EMAIL_BOX = 'input[type="email"], input[autocomplete="username"], input[name*="user" i], input[id*="user" i], input[name*="email" i], input[id*="email" i], input[name*="login" i]'
+
+const siteCreateTried = new Set<string>()
+const CREATE_LINK = /create an account|create account|register|sign up|new user/i
+
+/**
+ * SuccessFactors "Create an Account" page: email twice, password twice, name, country, the data privacy statement
+ * and the Create Account button. Accepting the statement and pressing the button happen only when the user has
+ * switched on "create accounts for me" in Settings, since that accepts the employer's terms on their behalf.
+ */
+async function successFactorsCreate(p: Page, login: { email: string; password: string }, profile: Profile | undefined, hooks: WorkdayHooks, res: PrefillResult): Promise<void> {
+  res.page = 'Create account'
+  const pw = login.password
+  const fill = async (id: string, v: string): Promise<void> => { const l = p.locator(`#${id}`).first(); if (v && (await l.isVisible().catch(() => false))) await typeInto(l, v, true) }
+  await fill('fbclc_userName', login.email); await fill('fbclc_emailConf', login.email)
+  await fill('fbclc_pwd', pw); await fill('fbclc_pwdConf', pw)
+  await fill('fbclc_fName', profile?.firstName || ''); await fill('fbclc_lName', profile?.lastName || '')
+  res.filled.push('Email', 'Password', 'Name')
+  const country = p.locator('#fbclc_country').first()
+  if (await country.isVisible().catch(() => false)) {
+    const ok = await country.selectOption({ label: profile?.country || 'Canada' }).then(() => true).catch(() => false)
+    if (ok) res.filled.push(`Country: ${profile?.country || 'Canada'}`)
+  }
+  // SuccessFactors' own password rules; a password outside them would only be rejected.
+  if (pw.length < 8 || pw.length > 18 || !/[a-z]/.test(pw) || !/[A-Z]/.test(pw) || !/[^A-Za-z\s]/.test(pw) || /\s/.test(pw)) {
+    res.note = 'This site needs a password of 8 to 18 characters with upper and lower case letters and a number or symbol, and your saved one does not fit. Type a password here yourself, accept the privacy statement and press Create Account. The app carries on once you are in.'
+    return
+  }
+  if (!hooks.autoCreate) { res.note = 'Filled the account form. Open and accept the data privacy statement, then press Create Account. To have the app do that too, turn on "create accounts for me" in Settings › Job site login.'; return }
+  if (await p.locator('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], .g-recaptcha, .h-captcha').first().count().catch(() => 0)) { res.note = 'Filled the account form. This site asks you to confirm you are not a robot: do that, accept the privacy statement and press Create Account yourself.'; return }
+  const privacy = p.locator('#dataPrivacyId').first()
+  if (await privacy.isVisible().catch(() => false)) {
+    await privacy.click().catch(() => {})
+    const accept = p.locator('button[id^="dlgButton_"]:visible, [role="dialog"] button:visible').filter({ hasText: /^\s*(i )?accept\s*$/i }).first()
+    if (await accept.waitFor({ state: 'visible', timeout: 8000 }).then(() => true).catch(() => false)) { await accept.click().catch(() => {}); await p.waitForTimeout(1200); res.filled.push('Accepted the data privacy statement') }
+    else { res.note = 'Filled the account form, but the privacy statement did not open. Accept it and press Create Account yourself.'; return }
+  }
+  const before = p.url()
+  await p.locator('#fbclc_createAccountButton').first().click().catch(() => {})
+  res.filled.push('Pressed Create Account')
+  let moved = false
+  for (let i = 0; i < 30 && !moved; i++) { await p.waitForTimeout(500); moved = p.url() !== before || !(await p.locator('#fbclc_pwdConf').first().isVisible().catch(() => false)) }
+  if (moved) { res.note = 'Created your account with the saved email and password. The application is filled as it appears. If the site emails a verification link, open it and come back.'; return }
+  const err = (await p.locator('[role="alert"], .rcmValidationMsgArea, .error, [class*="error" i]').locator('visible=true').allInnerTexts().catch(() => [] as string[])).map(t => t.replace(/\s+/g, ' ').trim()).filter(Boolean).join(' ').slice(0, 200)
+  res.note = `${err ? `The site says: "${err}". ` : 'The account page did not move on. '}Finish creating the account in the browser; the app carries on once you are in.`
+}
+
+async function siteSignIn(p: Page, hooks: WorkdayHooks, profile?: Profile): Promise<PrefillResult> {
+  const res = blank('Sign in')
+  const host = hostOf(p.url())
+  const manual = 'Sign in or create the account yourself in the browser; the app fills the application as soon as you are in.'
+  if (!p.url().startsWith('https://')) { res.note = `This sign-in page is not on a secure (https) address, so the app did not type your password. ${manual}`; return res }
+  if (siteRejected.has(host)) { res.note = `${host} rejected the saved login earlier, so the app will not try it again here. ${manual}`; return res }
+  const login = await hooks.getLogin()
+  if (!login) { res.note = `This site needs an account. Save your email and password in Settings › Job site login, or ${manual.charAt(0).toLowerCase()}${manual.slice(1)}`; return res }
+  const pws = p.locator('input[type="password"]:visible')
+  const count = await pws.count().catch(() => 0)
+  if (!count) return res
+  const email = p.locator(EMAIL_BOX).locator('visible=true').first()
+  if (await email.isVisible().catch(() => false)) { await typeInto(email, login.email, true); res.filled.push('Email') }
+  for (let i = 0; i < Math.min(count, 2); i++) await typeInto(pws.nth(i), login.password, true)
+  if (count > 1 && (await p.locator('#fbclc_pwdConf').first().isVisible().catch(() => false))) {
+    siteCreateTried.add(host)
+    await successFactorsCreate(p, login, profile, hooks, res)
+    return res
+  }
+  if (count > 1) {
+    res.page = 'Create account'
+    res.filled.push('Password', 'Confirm password')
+    res.note = 'Filled the account form with your saved email and password. Complete anything else it asks, accept its terms if you agree, and press the create button yourself. The app carries on once you are in.'
+    return res
+  }
+  res.filled.push('Password')
+  // A "confirm you are not a robot" check is the user's to do; pressing Sign In without it only produces an error.
+  if (await p.locator('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"], .g-recaptcha, .h-captcha').first().count().catch(() => 0)) {
+    res.note = 'Filled your saved login. This site asks you to confirm you are not a robot: tick that box and press Sign In yourself. The app fills the application as soon as you are in.'
+    return res
+  }
+  if (siteTried.has(host)) { res.note = 'Filled your saved login. Press Sign In yourself; the app already tried once on this site.'; return res }
+  siteTried.add(host)
+  const form = p.locator('form:has(input[type="password"])').first()
+  const btn = form.locator('button[type="submit"]:visible, input[type="submit"]:visible, button:visible').filter({ hasText: /sign in|log ?in|continue|next/i }).first()
+  const submit = (await btn.isVisible().catch(() => false)) ? btn : form.locator('button[type="submit"]:visible, input[type="submit"]:visible').first()
+  if (await submit.isVisible().catch(() => false)) await submit.click().catch(() => {}); else await pws.first().press('Enter').catch(() => {})
+  res.filled.push('Pressed Sign In')
+  // A rejected sign-in often reloads the page, so the password box vanishing for a moment proves nothing:
+  // the app waits for the page to settle and only counts it as signed in if the box stays gone.
+  let gone = false
+  for (let i = 0, clear = 0; i < 14 && !gone; i++) {
+    await p.waitForTimeout(1000)
+    await p.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {})
+    clear = (await p.locator('input[type="password"]:visible').count().catch(() => 1)) === 0 ? clear + 1 : 0
+    gone = clear >= 3
+  }
+  if (gone) { res.note = 'Signed in with your saved login. The application is filled as it appears.'; return res }
+  siteRejected.add(host)
+  // No account here yet: go to the site's create-account page and sign up with the same login.
+  // The wording "create an account" is tried first, looser wording ("register", "sign up") only as a fallback.
+  const links = p.locator('a, button').locator('visible=true')
+  const exact = links.filter({ hasText: /create (an |your )?account/i }).first()
+  const createLink = (await exact.isVisible().catch(() => false)) ? exact : links.filter({ hasText: CREATE_LINK }).first()
+  if (!siteCreateTried.has(host) && (await createLink.isVisible().catch(() => false))) {
+    siteCreateTried.add(host)
+    const href = await createLink.getAttribute('href').catch(() => null)
+    await createLink.click().catch(() => {})
+    await p.waitForLoadState('domcontentloaded', { timeout: 8000 }).catch(() => {})
+    const twoBoxes = (): Promise<boolean> => p.locator('input[type="password"]:visible').nth(1).waitFor({ state: 'visible', timeout: 6000 }).then(() => true).catch(() => false)
+    // After a rejected sign-in some sites ignore the click; the link's own address still works.
+    if (!(await twoBoxes()) && href && !/^(#|javascript:)/i.test(href)) {
+      await p.goto(new URL(href, p.url()).toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {})
+      await twoBoxes()
+    }
+    if (await p.locator('#fbclc_pwdConf').first().waitFor({ state: 'visible', timeout: 3000 }).then(() => true).catch(() => false)) {
+      res.filled.push('Sign-in was not accepted, so the app opened Create an Account')
+      await successFactorsCreate(p, login, profile, hooks, res)
+      return res
+    }
+    if ((await p.locator('input[type="password"]:visible').count().catch(() => 0)) > 1) {
+      const again = await siteSignIn(p, hooks, profile)
+      again.filled.unshift('Sign-in was not accepted, so the app opened the create-account page')
+      return again
+    }
+  }
+  const err = (await p.locator('[role="alert"], .error, .errorMessage, [class*="error" i]').locator('visible=true').allInnerTexts().catch(() => [] as string[])).map(t => t.replace(/\s+/g, ' ').trim()).filter(Boolean).join(' ').slice(0, 160)
+  res.note = `${err ? `The site says: "${err}". ` : 'The site did not accept the saved login. '}If you have no account here yet, create one in the browser with the same email and password. The app will not retry on this site, so the account cannot get locked. It carries on once you are in.`
+  return res
+}
+
+/** After Apply: reports the sign-in step once, then fills each application page as it appears (six at most). */
+async function watchApplication(start: Page, args: Args, hooks: WorkdayHooks): Promise<void> {
+  const token = ++watchToken
+  const end = begin('Watching the application for the next page')
+  try {
+    const done = new Set<string>()
+    const until = Date.now() + 45 * 60_000
+    let fills = 0
+    while (token === watchToken && Date.now() < until && !isStopping() && fills < 6) {
+      const p = latestPage(start)
+      if (p.isClosed()) break
+      page = p
+      try {
+        const heading = (await p.locator('h1:visible, h2:visible').first().innerText({ timeout: 400 }).catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 60)
+        const u = new URL(p.url())
+        const sig = `${u.host}${u.pathname}|${heading}`
+        if (await pwVisible(p)) {
+          const pwSig = `${sig}|pw${await p.locator('input[type="password"]:visible').count().catch(() => 0)}`
+          if (!done.has(pwSig)) { done.add(pwSig); await p.waitForTimeout(800); hooks.onUpdate(await siteSignIn(p, hooks, args[1])) }
+        } else if (!done.has(sig) && !(await isSuccessFactorsJobPage(p))) {
+          await p.waitForTimeout(1500)
+          const again = latestPage(start)
+          if (again === p && p.url().startsWith(`${u.origin}${u.pathname}`) && (await collectAll(p)).filter(x => x.f.kind !== 'file').length >= 3) {
+            done.add(sig); fills++
+            try { hooks.onUpdate(await fillCurrentPage(p, ...args, heading || 'Application page')) }
+            catch (e) { hooks.onUpdate(blank('Application page', `This page could not be filled: ${(e as Error).message.split('\n')[0].slice(0, 120)}`)) }
+          }
+        }
+      } catch { /* page navigating */ }
+      await new Promise(r => setTimeout(r, 2000))
+    }
+  } finally { end() }
 }
 
 export async function prefill(profileDir: string, args: Args, hooks: WorkdayHooks): Promise<PrefillResult> {
@@ -954,6 +1228,17 @@ export async function prefill(profileDir: string, args: Args, hooks: WorkdayHook
   await p.bringToFront().catch(() => {})
   await p.goto(job.applyUrl || job.url, { waitUntil: 'domcontentloaded', timeout: 45_000 })
   await p.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {})
+  if (!isWorkdayUrl(p.url()) && (await waitForSuccessFactorsJobPage(p))) {
+    const res = await successFactorsApply(p)
+    void watchApplication(p, args, hooks)
+    return res
+  }
+  // Any other site that opens on a sign-in form: use the saved login, then fill what follows.
+  if (!isWorkdayUrl(p.url()) && (await pwVisible(p))) {
+    const res = await siteSignIn(p, hooks, args[1])
+    void watchApplication(p, args, hooks)
+    return res
+  }
   if (!isWorkdayUrl(p.url())) return fillCurrentPage(p, ...args)
   // The first page's result is returned; later pages arrive through hooks.onUpdate.
   return new Promise<PrefillResult>(resolve => {
@@ -969,8 +1254,9 @@ export async function fillAgain(args: Args, hooks: WorkdayHooks): Promise<Prefil
   const p = pages[pages.length - 1]
   if (!p) throw new Error('The application browser has no open page.')
   page = p
+  if (!isWorkdayUrl(p.url()) && (await pwVisible(p))) return siteSignIn(p, hooks, args[1])
   return isWorkdayUrl(p.url()) ? workdayStep(p, args, hooks) : fillCurrentPage(p, ...args)
 }
 
 /** For tests: fill whatever page is open, without the Workday walk. */
-export const _test = { pressContinue, prefill, closeBrowser,  collectAll, fillCurrentPage, bestOption, workdayStep, pickInCombobox, visibleOptions }
+export const _test = { successFactorsApply, siteSignIn, pages: (): string[] => (context?.pages() || []).map(x => x.url()), stopWatching, pressContinue, prefill, closeBrowser,  collectAll, fillCurrentPage, bestOption, workdayStep, pickInCombobox, visibleOptions }

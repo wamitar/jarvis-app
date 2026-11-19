@@ -85,12 +85,13 @@ export function countByCompany(): Record<string, number> {
   for (const r of db.prepare('SELECT company, COUNT(*) AS n FROM jobs GROUP BY company').all() as { company: string; n: number }[]) out[r.company] = r.n
   return out
 }
-/** Removes untouched US jobs that the location rule no longer allows. Jobs you applied to, dismissed or tailored are left alone. */
-export function pruneUsJobs(allowed: (company: string, location: string) => boolean): number {
-  const rows = db.prepare("SELECT id, company, location FROM jobs WHERE region = 'usa' AND status = 'new' AND id NOT IN (SELECT job_id FROM tailored)").all() as { id: string; company: string; location: string }[]
+export interface StoredRow { id: string; company: string; title: string; location: string; region: string; description: string }
+/** Removes untouched jobs that the current rules no longer allow. Jobs you applied to, saved, dismissed or tailored are left alone. */
+export function pruneJobs(allowed: (r: StoredRow) => boolean): number {
+  const rows = db.prepare("SELECT id, company, title, location, region, description FROM jobs WHERE status = 'new' AND id NOT IN (SELECT job_id FROM tailored)").all() as unknown as StoredRow[]
   const del = db.prepare('DELETE FROM jobs WHERE id = ?')
   let n = 0
-  for (const r of rows) if (!allowed(r.company, r.location)) { del.run(r.id); n++ }
+  for (const r of rows) if (!allowed(r)) { del.run(r.id); n++ }
   return n
 }
 export function clearScores(): void { db.exec('UPDATE jobs SET score = NULL') }

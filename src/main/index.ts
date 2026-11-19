@@ -10,14 +10,15 @@ import * as db from './db'
 import { askJson, findCli, setUsageListener } from './ai/claude'
 import * as keychain from './keychain'
 import { normalizeResume, pdfToText, structureResume } from './resume/parse'
-import { tailorResume, shortenResume, findInventions } from './resume/tailor'
+import { tailorResume, shortenResume, findInventions, bankOf } from './resume/tailor'
+import { getActivity, setActivityListener, stopAll, track } from './activity'
 import { compileLatex, findTectonic, resumeLatex } from './resume/latex'
 import { htmlToPdf, letterHtml, resumeHtml, safeName } from './resume/render'
 import { refreshJobs, scorePending } from './refresh'
 import { allBoards } from './sources'
 import { UA, htmlToText } from './sources/util'
 import { regionOf } from './filter'
-import { closeBrowser, fillAgain, prefill, type WorkdayHooks } from './apply/prefill'
+import { closeBrowser, fillAgain, prefill, stopWatching, type WorkdayHooks } from './apply/prefill'
 
 // The data folder keeps its original name so a rename of the app never loses data.
 // Tests point IH_USER_DATA at a throwaway folder so they never touch real data.
@@ -66,8 +67,28 @@ function createWindow(): void {
   else win.loadFile(join(__dirname, '../renderer/index.html'))
 }
 
+/** Typesets a resume (LaTeX template, or the plain layout without a LaTeX engine) and its cover letter into the job's folder. */
+async function writePdfs(job: Job, clean: Resume, coverLetter: string): Promise<{ path: string; pages: number; coverPath: string | null }> {
+  const root = process.env.IH_USER_DATA ? join(process.env.IH_USER_DATA, 'pdfs') : join(app.getPath('documents'), 'J.A.R.V.I.S')
+  const dir = join(root, safeName(`${job.company} - ${job.title}`))
+  const who = safeName(clean.name || 'Resume')
+  const pdfOut = join(dir, `${who} - Resume.pdf`)
+  const { path, pages } = findTectonic(app.getPath('userData')) ? await compileLatex(resumeLatex(clean), pdfOut, app.getPath('userData')) : await htmlToPdf(resumeHtml(clean), pdfOut)
+  let coverPath: string | null = null
+  if (coverLetter.trim()) {
+    const c = clean.contact
+    coverPath = (await htmlToPdf(letterHtml(clean.name, [c.email, c.phone, c.location].filter(Boolean).join(' | '), coverLetter), join(dir, `${who} - Cover Letter.pdf`))).path
+  }
+  return { path, pages, coverPath }
+}
+
 function handlers(): void {
-  const h = (name: string, fn: (...args: any[]) => unknown): void => { ipcMain.handle(name, (_e, ...args) => fn(...args)) }
+  // A handler given a label counts as work in progress: it lights the status dot and can be stopped.
+  const h = (name: string, fn: (...args: any[]) => unknown, label = ''): void => {
+    ipcMain.handle(name, (_e, ...args) => (label ? track(label, async () => fn(...args)) : fn(...args)))
+  }
+  h('getActivity', () => getActivity())
+  h('stopAll', () => { stopWatching(); return stopAll() })
 
   h('getState', (): AppState => {
     const resume = db.kvGet('resume', emptyResume())
@@ -93,7 +114,7 @@ function handlers(): void {
         linkedin: resume.contact.linkedin, website: resume.contact.website, school: edu?.school || '', degree: edu?.degree || '' } satisfies Profile)
     }
     return resume
-  })
+  }, 'Reading your resume')
   h('chooseResumePdf', async (): Promise<{ name: string; path: string } | null> => {
     const pick = await dialog.showOpenDialog(win!, { title: 'Choose the resume PDF to attach to applications', properties: ['openFile'], filters: [{ name: 'PDF', extensions: ['pdf'] }] })
     if (pick.canceled || !pick.filePaths[0]) return null
@@ -107,9 +128,9 @@ function handlers(): void {
   h('listJobs', () => db.listJobs())
   h('getJob', (id: string) => { const job = db.getJob(id); return job ? { job, tailored: db.getTailored(id) } : null })
   h('updateJob', (id: string, patch: { status?: JobStatus; notes?: string }) => db.updateJob(id, patch))
-  h('refresh', () => exclusive(() => refreshJobs(settings(), progress)))
-  h('score', () => exclusive(() => scorePending(settings(), progress)))
-  h('rescore', () => exclusive(async () => { db.clearScores(); return scorePending(settings(), progress) }))
+  h('refresh', () => exclusive(() => refreshJobs(settings(), progress)), 'Getting jobs')
+  h('score', () => exclusive(() => scorePending(settings(), progress)), 'Scoring jobs')
+  h('rescore', () => exclusive(async () => { db.clearScores(); return scorePending(settings(), progress) }), 'Scoring jobs')
 
   h('addJob', async (input: { url: string; text: string }): Promise<Job> => {
     const url = (input.url || '').trim()
@@ -132,14 +153,15 @@ function handlers(): void {
     if (!db.insertJob(raw, region === 'unknown' ? 'other' : region)) throw new Error('That job is already in your list.')
     db.updateJob(raw.id, { status: 'saved' })
     return needJob(raw.id)
-  })
+  }, 'Adding a job')
 
   h('tailor', async (jobId: string, withCover: boolean): Promise<Tailored> => {
     const job = needJob(jobId)
     const base = db.kvGet('resume', emptyResume())
     if (!hasResume(base)) throw new Error('Add your resume first, on the Resume page.')
-    const profile = db.kvGet('profile', emptyProfile())
-    const out = await tailorResume(base, db.kvGet('resumeRaw', ''), job, withCover, profile.extra, settings().writeModel)
+    const profile = { ...emptyProfile(), ...db.kvGet('profile', emptyProfile()) }
+    const bank = bankOf(profile)
+    const out = await tailorResume(base, db.kvGet('resumeRaw', ''), job, withCover, profile.extra, settings().writeModel, bank)
     // Typeset it in the LaTeX template and make sure it is one page; if not, have Claude cut it (twice at most).
     if (findTectonic(app.getPath('userData'))) {
       const probe = join(app.getPath('userData'), 'tmp', `fit-${Date.now()}.pdf`)
@@ -151,7 +173,7 @@ function handlers(): void {
           out.changes.push('Shortened to fit one page.')
         }
         if (pages > 1) out.warnings.unshift(`The resume is still ${pages} pages. Trim it in Edit before saving.`)
-        out.warnings = out.warnings.filter(w => !/^Number not|^Term not/.test(w)).concat(findInventions(base, db.kvGet('resumeRaw', ''), out.resume, job))
+        out.warnings = out.warnings.filter(w => !/^Number not|^Term not/.test(w)).concat(findInventions(base, db.kvGet('resumeRaw', ''), out.resume, job, bank))
       } catch (e) { out.warnings.unshift(`LaTeX check failed: ${(e as Error).message.slice(0, 160)}`) }
       finally { for (const ext of ['.pdf', '.tex']) await rm(probe.replace(/\.pdf$/, ext), { force: true }).catch(() => {}) }
     }
@@ -160,38 +182,37 @@ function handlers(): void {
       pdfPath: null, updatedAt: new Date().toISOString() }
     db.saveTailored(t)
     return t
-  })
+  }, 'Tailoring a resume')
 
   h('saveTailored', async (jobId: string, resume: Resume, coverLetter: string) => {
     const job = needJob(jobId)
     const base = db.kvGet('resume', emptyResume())
     const clean = normalizeResume(resume)
-    const root = process.env.IH_USER_DATA ? join(process.env.IH_USER_DATA, 'pdfs') : join(app.getPath('documents'), 'J.A.R.V.I.S')
-    const dir = join(root, safeName(`${job.company} - ${job.title}`))
-    const who = safeName(clean.name || 'Resume')
-    // The resume is typeset with the user's LaTeX template (a .tex is saved beside the PDF). Without a LaTeX engine the plain layout is used.
-    const pdfOut = join(dir, `${who} - Resume.pdf`)
-    const { path, pages } = findTectonic(app.getPath('userData')) ? await compileLatex(resumeLatex(clean), pdfOut, app.getPath('userData')) : await htmlToPdf(resumeHtml(clean), pdfOut)
-    if (coverLetter.trim()) {
-      const c = clean.contact
-      await htmlToPdf(letterHtml(clean.name, [c.email, c.phone, c.location].filter(Boolean).join(' | '), coverLetter), join(dir, `${who} - Cover Letter.pdf`))
-    }
+    const { path, pages } = await writePdfs(job, clean, coverLetter)
     const prev = db.getTailored(jobId)
-    const t: Tailored = { jobId, resume: clean, coverLetter, changes: prev?.changes || [], warnings: findInventions(base, db.kvGet('resumeRaw', ''), clean, job),
+    const t: Tailored = { jobId, resume: clean, coverLetter, changes: prev?.changes || [], warnings: findInventions(base, db.kvGet('resumeRaw', ''), clean, job, bankOf({ ...emptyProfile(), ...db.kvGet('profile', emptyProfile()) })),
       pdfPath: path, updatedAt: new Date().toISOString() }
     db.saveTailored(t)
     if (['new', 'saved'].includes(job.status)) db.updateJob(jobId, { status: 'tailored' })
     return { ...t, pages }
-  })
+  }, 'Saving the PDF')
   h('revealPdf', (jobId: string) => { const t = db.getTailored(jobId); if (t?.pdfPath && existsSync(t.pdfPath)) shell.showItemInFolder(t.pdfPath) })
 
-  const applyArgs = (jobId: string): [Job, Profile, Resume, Tailored | null, string] => {
+  const applyArgs = async (jobId: string): Promise<[Job, Profile, Resume, Tailored | null, string]> => {
     const job = needJob(jobId)
-    const t = db.getTailored(jobId)
-    // Attach the tailored PDF; without one, the user's own resume PDF.
+    let t = db.getTailored(jobId)
+    let coverPdfPath: string | null = null
+    // A tailored resume is always what gets attached: its PDF (and the cover letter's) is made here if "Save PDF" was never pressed.
+    if (t) {
+      try {
+        const made = await writePdfs(job, normalizeResume(t.resume), t.coverLetter)
+        coverPdfPath = made.coverPath
+        if (t.pdfPath !== made.path) { t = { ...t, pdfPath: made.path }; db.saveTailored(t); if (['new', 'saved'].includes(job.status)) db.updateJob(jobId, { status: 'tailored' }) }
+      } catch { /* fall back to whatever PDF exists */ }
+    }
     const own = resumePdf()?.path || null
-    const tailored: Tailored | null = t && t.pdfPath && existsSync(t.pdfPath) ? t
-      : t ? { ...t, pdfPath: own }
+    const tailored: Tailored | null = t && t.pdfPath && existsSync(t.pdfPath) ? { ...t, coverPdfPath }
+      : t ? { ...t, pdfPath: own, coverPdfPath }
       : own ? { jobId, resume: db.kvGet('resume', emptyResume()), coverLetter: '', changes: [], warnings: [], pdfPath: own, updatedAt: '' } : null
     return [job, { ...emptyProfile(), ...db.kvGet('profile', emptyProfile()) }, t?.resume || db.kvGet('resume', emptyResume()), tailored, settings().writeModel]
   }
@@ -204,12 +225,12 @@ function handlers(): void {
     autoContinue: settings().workdayAutoContinue !== false,
     onUpdate: (result: PrefillResult) => send('prefillUpdate', { jobId, result })
   })
-  h('prefill', (jobId: string) => {
-    const a = applyArgs(jobId)
+  h('prefill', async (jobId: string) => {
+    const a = await applyArgs(jobId)
     if (!a[0].applyUrl && !a[0].url) throw new Error('This job has no link to open.')
     return prefill(join(app.getPath('userData'), 'apply-browser'), a, wdHooks(jobId))
-  })
-  h('fillAgain', (jobId: string) => fillAgain(applyArgs(jobId), wdHooks(jobId)))
+  }, 'Filling an application')
+  h('fillAgain', async (jobId: string) => fillAgain(await applyArgs(jobId), wdHooks(jobId)), 'Filling an application')
   h('setWorkdayLogin', async (email: string, password: string): Promise<WorkdayLogin> => {
     email = String(email || '').trim()
     if (!/^\S+@\S+\.\S+$/.test(email)) throw new Error('Enter a valid email address.')
@@ -230,6 +251,7 @@ function handlers(): void {
 app.whenReady().then(() => {
   db.openDb(join(app.getPath('userData'), 'internship-hunter.db'))
   setUsageListener(u => { db.kvSet('usage', u); send('usage', u) }, { ...NO_USAGE, calls: db.kvGet('aiCalls', 0), ...db.kvGet<Partial<Usage>>('usage', {}) })
+  setActivityListener(a => send('activity', a))
   handlers()
   createWindow()
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })

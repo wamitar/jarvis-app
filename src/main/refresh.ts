@@ -1,10 +1,11 @@
 import type { Coverage, Job, RawJob, RefreshProgress, RefreshResult, Settings } from '../shared/types'
 import { emptyProfile, emptyResume } from '../shared/types'
 import * as db from './db'
-import { checkJob, isInternTitle, regionOf, usAllowed } from './filter'
+import { checkJob, isInternTitle, regionOf, setTermFromProfile, textProblem, usAllowed } from './filter'
 import { allBoards, fetchAll, fetchDetail } from './sources'
 import { pool } from './sources/util'
 import { scoreJobs } from './match'
+import { isStopping, checkStop } from './activity'
 
 export async function scorePending(settings: Settings, progress: (p: RefreshProgress) => void): Promise<number> {
   const resume = db.kvGet('resume', emptyResume())
@@ -20,6 +21,7 @@ export async function scorePending(settings: Settings, progress: (p: RefreshProg
 
 export async function refreshJobs(settings: Settings, progress: (p: RefreshProgress) => void): Promise<RefreshResult> {
   const result: RefreshResult = { fetched: 0, passed: 0, added: 0, scored: 0, removed: 0, errors: [] }
+  setTermFromProfile(db.kvGet('profile', emptyProfile()).termLength || '')
   const { jobs, errors } = await fetchAll(settings, (done, total, label) => progress({ stage: 'Fetching', detail: label, done, total }))
   result.fetched = jobs.length
   result.errors = errors
@@ -34,6 +36,7 @@ export async function refreshJobs(settings: Settings, progress: (p: RefreshProgr
   }
   let done = 0
   await pool(needDetail, 4, async j => {
+    if (isStopping()) return
     try {
       const d = await fetchDetail(j)
       const full: RawJob = { ...j, description: d.description, location: d.location || j.location }
@@ -45,10 +48,11 @@ export async function refreshJobs(settings: Settings, progress: (p: RefreshProgr
     } catch (e) { if (result.errors.length < 30) result.errors.push(`${j.company} posting: ${(e as Error).message}`) }
     progress({ stage: 'Reading postings', detail: j.company, done: ++done, total: needDetail.length })
   })
+  checkStop()
   result.passed = direct.length
   for (const { j, region } of direct) if (db.insertJob(j, region)) result.added++
 
-  result.removed = db.pruneUsJobs((company, location) => usAllowed(company, location))
+  result.removed = db.pruneJobs(r => (r.region !== 'usa' || usAllowed(r.company, r.location)) && !(r.description && textProblem(r.title, r.description)))
 
   // Per-company record of this run, so the user can see a company was searched even when nothing matched.
   const stored = db.countByCompany()

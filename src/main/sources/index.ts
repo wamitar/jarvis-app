@@ -6,6 +6,7 @@ import { fetchAshby } from './ashby'
 import { fetchWorkday, fetchWorkdayDetail } from './workday'
 import { fetchJobBank, fetchJobBankDetail } from './jobbank'
 import { fetchAdzuna } from './adzuna'
+import { isStopping, checkStop } from '../activity'
 import { bambooHrDetail, fetchBambooHr, fetchSuccessFactors, fetchUkg, fetchWorkable, successFactorsDetail, workableDetail } from './canada'
 import { eightfoldDetail, fetchAmazon, fetchApple, fetchEightfold, fetchGoogle, fetchJibe, fetchOracle, fetchSmartRecruiters, oracleDetail, smartRecruitersDetail } from './bigtech'
 import { pool } from './util'
@@ -37,9 +38,11 @@ export async function fetchAll(settings: Settings, onProgress: (done: number, to
   const tick = (label: string): void => { done++; onProgress(done, total, label) }
 
   await pool(boards, 6, async b => {
+    if (isStopping()) return
     try { jobs.push(...await FETCHERS[b.ats](b)) } catch (e) { errors.push(`${b.company}: ${(e as Error).message}`) }
     tick(b.company)
   })
+  checkStop()
   if (!only.length) try { jobs.push(...await fetchJobBank()) } catch (e) { errors.push(`Job Bank: ${(e as Error).message}`) }
   tick('Job Bank Canada')
   if (useAdzuna) {

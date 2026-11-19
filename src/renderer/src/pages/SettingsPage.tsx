@@ -73,15 +73,17 @@ export function SettingsPage({ state, reload, notify }: { state: AppState; reloa
           <span className="muted small" style={{ marginLeft: 10 }}>Clears every score and scores again. Use after you change your resume.</span></div>
       </div>
 
-      <div className="card"><h3>Workday account</h3>
-        <p className="muted" style={{ marginBottom: 10 }}>Many large employers (Boeing, GM, NVIDIA, Magna and others) take applications through Workday, and each one needs its own account. Store one email and password here and the app uses them on every Workday site.</p>
+      <div className="card"><h3>Job site login</h3>
+        <p className="muted" style={{ marginBottom: 10 }}>Most employers make you create an account before applying (Workday, SuccessFactors and others). Store one email and password here and the app uses them on every job site it opens for an application.</p>
         <ul className="plain small muted" style={{ marginBottom: 12 }}>
           <li><b>Stored once.</b> The password is kept in your Mac Keychain, not in the app's database, and is never shown again or sent to Claude.</li>
-          <li><b>Account pages.</b> On a Workday Create Account page the app types the email, password and confirm-password. On a Sign In page it signs you in.</li>
-          <li><b>Then the form.</b> Once you are in, it fills each application page as it appears. You press Save and Continue, and Submit.</li>
+          <li><b>Sign-in pages.</b> On any job site's sign-in form the app types the email and password and presses Sign In, once. If the site rejects it, the app stops trying there so the account cannot get locked.</li>
+          <li><b>New accounts.</b> On a create-account form it fills the email, password and confirm-password. On Workday it can also press Create Account (below); on other sites you press the button.</li>
+          <li><b>Where it is typed.</b> Only on a secure (https) page reached from a job you chose to pre-fill.</li>
+          <li><b>Then the form.</b> Once you are in, it fills each application page as it appears. Submit is always yours.</li>
         </ul>
         <div className="grid2">
-          <label className="f"><span>Workday email</span><input type="email" autoComplete="off" value={wdEmail} onChange={e => setWdEmail(e.target.value)} /></label>
+          <label className="f"><span>Email</span><input type="email" autoComplete="off" value={wdEmail} onChange={e => setWdEmail(e.target.value)} /></label>
           <label className="f"><span>{wd.hasPassword ? 'New password (leave empty to keep the saved one)' : 'Password'}</span>
             <input type="password" autoComplete="new-password" value={wdPass} placeholder={wd.hasPassword ? 'Saved in Keychain' : 'At least 8 characters, with a capital, a digit and a symbol'} onChange={e => setWdPass(e.target.value)} /></label>
         </div>
@@ -92,7 +94,7 @@ export function SettingsPage({ state, reload, notify }: { state: AppState; reloa
         </div>
         <label className="rowx small" style={{ marginTop: 12, alignItems: 'flex-start', flexWrap: 'nowrap' }}>
           <input type="checkbox" style={{ width: 'auto', marginTop: 3 }} checked={s.workdayAutoCreate} onChange={e => save({ ...s, workdayAutoCreate: e.target.checked }, e.target.checked ? 'The app will press Create Account for you.' : 'You press Create Account yourself.')} />
-          <span>Also tick the agreement box and press <b>Create Account</b> for me. This accepts that employer's Workday terms on your behalf each time. Left off, the app fills the three fields and you press the button. Email verification links are always yours to open.</span>
+          <span>Create accounts for me: accept the site's agreement or privacy statement and press <b>Create Account</b> (Workday and SuccessFactors). This accepts that employer's terms on your behalf each time. Left off, the app fills the form and you accept and press the button. Email verification links and robot checks are always yours.</span>
         </label>
         <label className="rowx small" style={{ marginTop: 10, alignItems: 'flex-start', flexWrap: 'nowrap' }}>
           <input type="checkbox" style={{ width: 'auto', marginTop: 3 }} checked={s.workdayAutoContinue !== false} onChange={e => save({ ...s, workdayAutoContinue: e.target.checked }, e.target.checked ? 'The app will press Save and Continue between pages.' : 'You press Save and Continue yourself.')} />
