@@ -182,7 +182,7 @@ export async function oracleDetail(url: string): Promise<string> {
 export async function fetchSmartRecruiters(b: Board): Promise<RawJob[]> {
   interface Post { id: string; name: string; releasedDate?: string; ref: string; location?: { city?: string; region?: string; country?: string } }
   const seen = new Map<string, RawJob>()
-  for (const country of ['us', 'ca']) {
+  for (const country of ['us', 'ca', 'gb']) {
     for (let offset = 0; offset < 300; offset += 100) {
       const d = await getJson<{ content?: Post[] }>(`https://api.smartrecruiters.com/v1/companies/${b.id}/postings?q=intern&country=${country}&limit=100&offset=${offset}`)
       const posts = d.content || []
@@ -192,7 +192,7 @@ export async function fetchSmartRecruiters(b: Board): Promise<RawJob[]> {
         const url = `https://jobs.smartrecruiters.com/${b.id}/${p.id}`
         seen.set(p.id, {
           id: `smartrecruiters:${b.id}:${p.id}`, source: 'smartrecruiters', company: b.company, title: (p.name || '').trim(),
-          location: [l.city, l.region, l.country === 'ca' ? 'Canada' : l.country === 'us' ? 'USA' : l.country].filter(Boolean).join(', '),
+          location: [l.city, l.region, l.country === 'ca' ? 'Canada' : l.country === 'us' ? 'USA' : l.country === 'gb' ? 'United Kingdom' : l.country].filter(Boolean).join(', '),
           url, applyUrl: url, description: '', postedAt: p.releasedDate || null, big: b.big, detailUrl: p.ref
         })
       }

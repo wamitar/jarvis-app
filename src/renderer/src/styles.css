@@ -115,3 +115,30 @@ ul.plain { margin: 0; padding-left: 18px; } ul.plain li { margin-bottom: 2px; }
 .status .kill { all: unset; cursor: pointer; text-align: center; padding: 5px 8px; border-radius: 6px; font-weight: 600; color: #fff; background: #c0392b; }
 .status .kill:hover { background: #a93226; } .status .kill:disabled { opacity: 0.5; cursor: default; }
 .status .kill:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+.job.noscore { grid-template-columns: 1fr auto; }
+
+.pill.flag { background: var(--bad-soft); color: var(--bad); }
+.dialog-back { position: fixed; inset: 0; background: rgba(0,0,0,0.35); display: grid; place-items: center; z-index: 50; }
+.dialog { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 12px; padding: 20px 22px; width: min(520px, calc(100vw - 32px)); box-shadow: 0 12px 40px rgba(0,0,0,0.25); display: grid; gap: 8px; }
+.dialog h2 { margin: 0 0 4px; }
+
+/* Status page */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 16px; display: flex; flex-direction: column; gap: 2px; }
+.tile b { font-size: 24px; font-weight: 650; }
+.tile span { color: var(--muted); font-size: 12.5px; }
+.tile.warn b { color: var(--bad); }
+.now { display: flex; align-items: center; gap: 10px; }
+.now .lamp { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); opacity: 0.45; flex: none; }
+.now .lamp.on { background: var(--good); opacity: 1; box-shadow: 0 0 0 4px var(--good-soft); animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 7px transparent; } }
+.steps { margin: 12px 0 0 20px; color: var(--muted); font-size: 12.5px; display: grid; gap: 3px; }
+.steps li:last-child { color: var(--text); }
+.runlist { display: grid; }
+.runrow { display: grid; grid-template-columns: 130px 1fr auto; gap: 12px; align-items: center; padding: 8px 0; border-top: 1px solid var(--border); }
+.runrow:first-child { border-top: 0; }
+.runrow.on { background: var(--accent-soft); margin: 0 -10px; padding: 8px 10px; border-radius: 8px; }
+.runrow .pill { justify-self: start; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 640px) { .runrow { grid-template-columns: 1fr; gap: 4px; } }

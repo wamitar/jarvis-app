@@ -7,13 +7,34 @@ import type { Board } from '../shared/types'
 
 const b = (company: string, ats: Board['ats'], id: string, big = true): Board => ({ company, ats, id, big })
 
-/** Large, very well known employers: their US internships are kept in any state. */
+/** Large, very well known employers: their US internships are kept in any state, and their UK internships are kept. */
 export const KNOWN = new Set([
   'SpaceX', 'Anduril', 'Waymo', 'Zoox', 'Neuralink', 'Lucid Motors', 'Rocket Lab', 'Blue Origin', 'Boston Dynamics', 'Figure',
   'NVIDIA', 'AMD', 'Intel', 'Qualcomm', 'Samsung', 'Cisco', 'Broadcom', 'Micron', 'Applied Materials', 'HP',
   'Amazon', 'Apple', 'Google', 'Microsoft', 'Netflix', 'OpenAI', 'Anthropic', 'xAI', 'Meta', 'Tesla',
   'Boeing', 'Northrop Grumman', 'RTX (Collins, Pratt & Whitney, Raytheon)', 'GE Aerospace', 'GE Vernova', 'GE HealthCare', 'L3Harris',
-  'General Motors', 'Ford', 'Honeywell', 'Bosch', 'Caterpillar', '3M', 'Medtronic', 'Shell', 'Chevron', 'Bombardier', 'Magna'
+  'General Motors', 'Ford', 'Honeywell', 'Bosch', 'Caterpillar', '3M', 'Medtronic', 'Shell', 'Chevron', 'Bombardier', 'Magna',
+  // Global engineering names with large UK sites; their UK internships are kept too (UK jobs need a KNOWN employer)
+  'Rolls-Royce', 'Airbus', 'Cummins', 'ABB', 'Stryker', 'KLA', 'Analog Devices', 'Hitachi', 'Thales',
+  // Well-known engineering employers that the SimplifyJobs list brings in (added 2026-11-22)
+  'Texas Instruments', 'Rockwell Automation', 'Garmin', 'Hewlett Packard Enterprise', 'Keysight', 'onsemi', 'Toyota',
+  'Toyota Research Institute', 'Bose', 'GlobalFoundries', 'Westinghouse', 'Procter & Gamble', 'Philips', 'ASML',
+  'BorgWarner', 'Oshkosh', 'Western Digital', 'Formlabs', 'Danaher', 'Intuitive Surgical', 'Lockheed Martin',
+  'General Dynamics', 'BAE Systems', 'Leonardo', 'MBDA',
+  // Major UK engineering employers (added 2026-11-23, so their UK internships and placements are kept)
+  'Jaguar Land Rover', 'Dyson', 'McLaren', 'Mercedes-AMG Petronas F1', 'Red Bull Racing', 'Williams Racing', 'Aston Martin',
+  'Bentley Motors', 'JCB', 'Arup', 'Mott MacDonald', 'Atkins', 'AECOM', 'Babcock', 'QinetiQ', 'Ricardo', 'Renishaw',
+  'Siemens', 'National Grid', 'Network Rail', 'EDF', 'Sellafield', 'Unilever', 'GSK', 'AstraZeneca', 'Arm', 'Nissan', 'Ocado'
+])
+
+/**
+ * U.S. defense contractors whose U.S. roles need U.S.-person status (export control or clearance), even when a
+ * posting does not say so. Their U.S. jobs are left out; their Canadian jobs (L3Harris WESCAM, Pratt & Whitney
+ * Canada and so on) are kept, since those do not need it.
+ */
+export const US_DEFENSE = new Set([
+  'Anduril', 'Northrop Grumman', 'RTX (Collins, Pratt & Whitney, Raytheon)', 'L3Harris', 'Leidos', 'Leonardo DRS',
+  'Saronic', 'Epirus', 'Chaos Industries', 'Hermeus', 'Hadrian', 'Curtiss-Wright', 'Lockheed Martin', 'General Dynamics', 'BAE Systems'
 ])
 
 export const BOARDS: Board[] = [
@@ -101,7 +122,9 @@ export const BOARDS: Board[] = [
   b('Air Liquide', 'workday', 'airliquidehr|wd3|AirLiquideExternalCareer'), b('Northland Power', 'workday', 'northlandpower|wd3|ExternalCS'),
   b('Capital Power', 'workday', 'capitalpower|wd10|External'), b('Cenovus', 'workday', 'cenovus|wd3|Careers'), b('ENMAX', 'workday', 'enmax|wd3|EnmaxCareers'),
   b('Finning', 'workday', 'finning|wd3|External'), b('Hitachi', 'workday', 'hitachi|wd1|Hitachi'), b('Keyera', 'workday', 'keyera|wd10|Keyera_Careers'),
-  b('Ledcor', 'workday', 'ledcor|wd3|Ledcor_External'), b('Rolls-Royce', 'workday', 'rollsroyce|wd3|Professional'),
+  b('Ledcor', 'workday', 'ledcor|wd3|Ledcor_External'), b('Rolls-Royce', 'workday', 'rollsroyce|wd3|Professional'), b('Rolls-Royce', 'workday', 'rollsroyce|wd3|Intern_Graduate'),
+  b('Unilever', 'workday', 'unilever|wd3|unilever_early_careers'), b('GSK', 'workday', 'gsk|wd5|GSKCareers'),
+  b('AstraZeneca', 'workday', 'astrazeneca|wd3|Emerging-Talent'),
   b('STEMCELL Technologies', 'workday', 'stemcell|wd3|External_Careers'), b('Suncor', 'workday', 'suncor|wd1|Suncor_External'),
   b('Thales', 'workday', 'thales|wd3|Careers'), b('Apotex', 'successfactors', 'careers.apotex.com'), b('BWXT', 'successfactors', 'careers.bwxt.com'),
   b('Hydro One', 'successfactors', 'jobs.hydroone.com'), b('Leonardo DRS', 'successfactors', 'careers.leonardodrs.com'),

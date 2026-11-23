@@ -3,23 +3,25 @@
 import { spawn, execFile } from 'node:child_process'
 
 const SERVICE = process.env.IH_USER_DATA ? 'J.A.R.V.I.S Workday (test)' : 'J.A.R.V.I.S Workday'
+/** The Gmail sign-in token (read-only access, for verification emails) is kept in its own Keychain item. */
+export const GMAIL_SERVICE = process.env.IH_USER_DATA ? 'J.A.R.V.I.S Gmail (test)' : 'J.A.R.V.I.S Gmail'
 const q = (s: string): string => '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'
 
 function run(args: string[]): Promise<{ code: number; out: string }> {
   return new Promise(resolve => execFile('/usr/bin/security', args, { timeout: 15000 }, (err, stdout) => resolve({ code: err ? 1 : 0, out: String(stdout) })))
 }
 
-export async function getPassword(email: string): Promise<string | null> {
+export async function getPassword(email: string, service = SERVICE): Promise<string | null> {
   if (!email) return null
-  const r = await run(['find-generic-password', '-s', SERVICE, '-a', email, '-w'])
+  const r = await run(['find-generic-password', '-s', service, '-a', email, '-w'])
   return r.code === 0 ? r.out.replace(/\n$/, '') : null
 }
 
-export async function deletePassword(email: string): Promise<void> {
-  if (email) await run(['delete-generic-password', '-s', SERVICE, '-a', email])
+export async function deletePassword(email: string, service = SERVICE): Promise<void> {
+  if (email) await run(['delete-generic-password', '-s', service, '-a', email])
 }
 
-export async function setPassword(email: string, password: string): Promise<void> {
+export async function setPassword(email: string, password: string, service = SERVICE): Promise<void> {
   if (!email || !password) throw new Error('Enter both the email and the password.')
   if (/[\r\n]/.test(email + password)) throw new Error('The email and password cannot contain line breaks.')
   // The Keychain tool returns non-ASCII passwords in an encoded form the app cannot read back reliably.
@@ -28,8 +30,8 @@ export async function setPassword(email: string, password: string): Promise<void
     const child = spawn('/usr/bin/security', ['-i'], { stdio: ['pipe', 'ignore', 'ignore'] })
     child.on('error', reject)
     child.on('close', c => resolve(c ?? 1))
-    child.stdin.end(`add-generic-password -U -s ${q(SERVICE)} -a ${q(email)} -l ${q(SERVICE)} -w ${q(password)}\n`)
+    child.stdin.end(`add-generic-password -U -s ${q(service)} -a ${q(email)} -l ${q(service)} -w ${q(password)}\n`)
   })
-  const back = await getPassword(email)
-  if (code !== 0 || back !== password) { await deletePassword(email); throw new Error('The Mac Keychain did not accept that password. Nothing was saved.') }
+  const back = await getPassword(email, service)
+  if (code !== 0 || back !== password) { await deletePassword(email, service); throw new Error('The Mac Keychain did not accept that password. Nothing was saved.') }
 }

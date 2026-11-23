@@ -1,7 +1,7 @@
-export type Region = 'ontario' | 'canada' | 'usa' | 'other'
+export type Region = 'ontario' | 'canada' | 'usa' | 'uk' | 'other'
 export type JobStatus = 'new' | 'saved' | 'tailored' | 'applied' | 'interview' | 'offer' | 'rejected' | 'hidden'
 export type BoardAts = 'greenhouse' | 'lever' | 'ashby' | 'workday' | 'amazon' | 'google' | 'apple' | 'eightfold' | 'oracle' | 'smartrecruiters' | 'jibe' | 'successfactors' | 'ukg' | 'bamboohr' | 'workable'
-export type Ats = BoardAts | 'jobbank' | 'adzuna' | 'manual'
+export type Ats = BoardAts | 'jobbank' | 'adzuna' | 'manual' | 'simplify' | 'linkedin'
 
 export interface RawJob {
   id: string            // unique: source:company:postingId
@@ -53,12 +53,29 @@ export interface Profile {
   address: string; city: string; province: string; postalCode: string; country: string
   linkedin: string; website: string; github: string
   school: string; degree: string; major: string; gpa: string; graduation: string
-  citizenship: string; workAuthCanada: string; workAuthUsa: string; needsSponsorship: string
+  citizenship: string
+  citizenshipDates?: string   // when each citizenship was obtained, e.g. "Canada: 2005-03-14 (by birth); United States: 2005-03-14 (by birth)"
+  workAuthCanada: string; workAuthUsa: string; workAuthUk: string
+  needsSponsorship: string    // for Canada
+  sponsorshipUsa: string; sponsorshipUk: string
   availability: string; termLength: string; willingToRelocate: string
   extra: string         // free-form facts Claude may use for screening answers
   moreProjects: Resume['projects']   // projects not on the resume; tailoring picks whichever fit a posting best
   moreSkills: string    // software and skills the candidate has beyond the resume; tailoring may list them
 }
+
+/** One job's outcome from an auto-apply run. */
+/** One job in the current (or last) auto-apply run, for the Status page. */
+export interface LiveJob {
+  jobId: string; company: string; title: string
+  state: 'waiting' | 'tailoring' | 'working' | 'applied' | 'flagged' | 'dryrun' | 'skipped'
+  page: string           // the application page it is on, e.g. "Workday: My Experience"
+  reason: string         // why it was flagged, when it was
+  steps: string[]        // what was done, newest last ("My Information: filled 6, pressed Save and Continue")
+  startedAt?: string; endedAt?: string
+}
+export interface LiveRun { running: boolean; startedAt: string; endedAt?: string; jobs: LiveJob[] }
+export interface AutoApplyResult { jobId: string; outcome: 'applied' | 'flagged' | 'dryrun'; reason: string; page: string; at: string; shot: string }
 
 /** What the app is doing right now (sidebar status light). */
 export interface Activity { working: boolean; stopping: boolean; tasks: string[] }
@@ -89,8 +106,26 @@ export interface Settings {
   adzunaAppId: string; adzunaAppKey: string
   customBoards: Board[]
   scoreModel: string; writeModel: string
+  aiProvider?: 'claude' | 'codex'   // which signed-in AI tool does the work (Claude Code or Codex); models are tiers: haiku / sonnet / opus
   workdayAutoCreate: boolean   // also tick the agreement box and press Create Account on Workday
   workdayAutoContinue?: boolean // press Save and Continue between Workday pages (on unless set to false); never Submit
+  gmailClientId?: string; gmailClientSecret?: string   // the user's own Google OAuth desktop client, for read-only Gmail
+  autoApplyWindow?: 'hidden' | 'minimized'   // auto-apply's Chrome: no window at all (default) or a minimized window
+  useSimplify?: boolean        // read the SimplifyJobs internship list (on unless set to false)
+  useLinkedInAlerts?: boolean  // read LinkedIn job-alert emails through Gmail (on unless set to false)
+}
+
+/** An extra document the user keeps for applications (Profile › Additional documents). */
+export type DocKind = 'transcript' | 'portfolio' | 'reference' | 'certificate' | 'cover_letter' | 'writing_sample' | 'resume' | 'other'
+export const DOC_KIND_LABEL: Record<DocKind, string> = {
+  transcript: 'Transcript', portfolio: 'Portfolio / work samples', reference: 'Reference letter', certificate: 'Certificate or licence',
+  cover_letter: 'Cover letter', writing_sample: 'Writing sample', resume: 'Resume / CV', other: 'Other'
+}
+export interface DocFile {
+  id: string; name: string; path: string; kind: DocKind
+  summary: string        // one line saying what it is ("Carleton University unofficial transcript, Fall 2024")
+  byUser: boolean        // the user set the kind (otherwise the app's classification)
+  addedAt: string
 }
 
 /** What the last "Get jobs" run found at one company. */
@@ -107,7 +142,7 @@ export const emptyResume = (): Resume => ({
 export const emptyProfile = (): Profile => ({
   firstName: '', lastName: '', email: '', phone: '', address: '', city: '', province: '', postalCode: '', country: 'Canada',
   linkedin: '', website: '', github: '', school: '', degree: '', major: 'Mechanical Engineering', gpa: '',
-  graduation: '', citizenship: '', workAuthCanada: '', workAuthUsa: '', needsSponsorship: '', availability: '',
+  graduation: '', citizenship: '', citizenshipDates: '', workAuthCanada: '', workAuthUsa: '', workAuthUk: '', needsSponsorship: '', sponsorshipUsa: '', sponsorshipUk: '', availability: '',
   termLength: '', willingToRelocate: '', extra: '', moreProjects: [], moreSkills: ''
 })
 

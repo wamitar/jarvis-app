@@ -38,6 +38,7 @@ export function SettingsPage({ state, reload, notify }: { state: AppState; reloa
   const [s, setS] = useState<Settings>(state.settings)
   const [nb, setNb] = useState<Board>({ company: '', ats: 'greenhouse', id: '', big: false })
   const [busy, setBusy] = useState(false)
+  const codex = s.aiProvider === 'codex'
   const save = async (next: Settings, msg = 'Settings saved.'): Promise<void> => { setS(next); await window.api.saveSettings(next); await reload(); notify(msg) }
   const addBoard = (): void => {
     if (!nb.company.trim() || !nb.id.trim()) return notify('Enter the company name and its board id.', true)
@@ -56,18 +57,34 @@ export function SettingsPage({ state, reload, notify }: { state: AppState; reloa
   }
   const clearWd = async (): Promise<void> => { const r = await window.api.clearWorkdayLogin(); setWd(r); setWdEmail(''); setWdPass(''); await reload(); notify('Workday login removed from this app and from the Keychain.') }
   const curated = state.boards.length - s.customBoards.length
+  const [gm, setGm] = useState(state.gmail.email)
+  const [gmId, setGmId] = useState(s.gmailClientId || '')
+  const [gmSecret, setGmSecret] = useState(s.gmailClientSecret || '')
+  const [gmBusy, setGmBusy] = useState(false)
+  const connectGm = async (): Promise<void> => {
+    setGmBusy(true)
+    try { const r = await window.api.connectGmail(gmId, gmSecret); setGm(r.email); await reload(); notify(`Gmail connected read-only: ${r.email}.`) } catch (e) { notify(errText(e), true) } finally { setGmBusy(false) }
+  }
+  const disconnectGm = async (): Promise<void> => { await window.api.disconnectGmail(); setGm(''); await reload(); notify('Gmail disconnected, and the access was revoked at Google.') }
 
   return (
     <div className="page narrow">
       <div className="head"><div><h1>Settings</h1><p>{state.lastRefresh ? `Jobs last refreshed ${new Date(state.lastRefresh).toLocaleString()}.` : 'Jobs have not been refreshed yet.'}</p></div></div>
 
-      <div className="card"><h3>Claude</h3>
-        <p className="muted" style={{ marginBottom: 10 }}>The app uses the Claude Code sign-in on this Mac, so usage counts against your Claude plan. There is no API key and no extra bill.</p>
+      <div className="card"><h3>AI</h3>
+        <label className="f" style={{ marginBottom: 10 }}><span>AI that does the work</span>
+          <select style={{ width: '100%' }} value={s.aiProvider || 'claude'} onChange={e => save({ ...s, aiProvider: e.target.value as Settings['aiProvider'] }, e.target.value === 'codex' ? 'Using Codex (your ChatGPT plan) from now on.' : 'Using Claude from now on.')}>
+            <option value="claude">Claude (Claude Code sign-in, your Claude plan)</option>
+            <option value="codex">ChatGPT (Codex sign-in, your ChatGPT plan)</option>
+          </select></label>
+        <p className="muted" style={{ marginBottom: 10 }}>{codex
+          ? 'The app uses the Codex sign-in on this Mac, so usage counts against your ChatGPT plan. Codex runs with every tool switched off: it only reads and answers.'
+          : 'The app uses the Claude Code sign-in on this Mac, so usage counts against your Claude plan.'} There is no API key and no extra bill. Model choices below are matched between the two: light, balanced, strongest.{codex ? ' Codex uses the newest version of each (e.g. GPT-6.2-Sol) that your Codex install supports, falling back to the one before (GPT-6.1-Sol).' : ''}</p>
         <div className="grid2">
           <label className="f"><span>Model for scoring jobs</span>
-            <select style={{ width: '100%' }} value={s.scoreModel} onChange={e => save({ ...s, scoreModel: e.target.value })}><option value="haiku">Haiku (lightest on your plan)</option><option value="sonnet">Sonnet</option><option value="opus">Opus</option></select></label>
+            <select style={{ width: '100%' }} value={s.scoreModel} onChange={e => save({ ...s, scoreModel: e.target.value })}><option value="haiku">{codex ? 'GPT Luna' : 'Haiku'} (lightest on your plan)</option><option value="sonnet">{codex ? 'GPT Sol' : 'Sonnet'}</option><option value="opus">{codex ? 'GPT Astra' : 'Opus'}</option></select></label>
           <label className="f"><span>Model for resumes and answers</span>
-            <select style={{ width: '100%' }} value={s.writeModel} onChange={e => save({ ...s, writeModel: e.target.value })}><option value="haiku">Haiku</option><option value="sonnet">Sonnet (recommended)</option><option value="opus">Opus (heaviest on your plan)</option></select></label>
+            <select style={{ width: '100%' }} value={s.writeModel} onChange={e => save({ ...s, writeModel: e.target.value })}><option value="haiku">{codex ? 'GPT Luna' : 'Haiku'}</option><option value="sonnet">{codex ? 'GPT Sol' : 'Sonnet'} (recommended)</option><option value="opus">{codex ? 'GPT Astra' : 'Opus'} (heaviest on your plan)</option></select></label>
         </div>
         <div style={{ marginTop: 12 }}><button className="btn" onClick={rescore} disabled={busy}>{busy && <span className="spin" />}Rescore all jobs</button>
           <span className="muted small" style={{ marginLeft: 10 }}>Clears every score and scores again. Use after you change your resume.</span></div>
@@ -76,7 +93,7 @@ export function SettingsPage({ state, reload, notify }: { state: AppState; reloa
       <div className="card"><h3>Job site login</h3>
         <p className="muted" style={{ marginBottom: 10 }}>Most employers make you create an account before applying (Workday, SuccessFactors and others). Store one email and password here and the app uses them on every job site it opens for an application.</p>
         <ul className="plain small muted" style={{ marginBottom: 12 }}>
-          <li><b>Stored once.</b> The password is kept in your Mac Keychain, not in the app's database, and is never shown again or sent to Claude.</li>
+          <li><b>Stored once.</b> The password is kept in your Mac Keychain, not in the app's database, and is never shown again or sent to the AI.</li>
           <li><b>Sign-in pages.</b> On any job site's sign-in form the app types the email and password and presses Sign In, once. If the site rejects it, the app stops trying there so the account cannot get locked.</li>
           <li><b>New accounts.</b> On a create-account form it fills the email, password and confirm-password. On Workday it can also press Create Account (below); on other sites you press the button.</li>
           <li><b>Where it is typed.</b> Only on a secure (https) page reached from a job you chose to pre-fill.</li>
@@ -100,10 +117,43 @@ export function SettingsPage({ state, reload, notify }: { state: AppState; reloa
           <input type="checkbox" style={{ width: 'auto', marginTop: 3 }} checked={s.workdayAutoContinue !== false} onChange={e => save({ ...s, workdayAutoContinue: e.target.checked }, e.target.checked ? 'The app will press Save and Continue between pages.' : 'You press Save and Continue yourself.')} />
           <span>Press <b>Save and Continue</b> for me after each page is filled. It holds back when a required field is still empty, and it stops at the Review page: <b>Submit</b> is always yours.</span>
         </label>
+        <label className="rowx small" style={{ marginTop: 10, alignItems: 'center', flexWrap: 'nowrap' }}>
+          <span>Auto-apply's Chrome:</span>
+          <select style={{ width: 'auto' }} value={s.autoApplyWindow || 'hidden'} onChange={e => save({ ...s, autoApplyWindow: e.target.value as Settings['autoApplyWindow'] }, e.target.value === 'hidden' ? 'Auto-apply runs with no window at all.' : 'Auto-apply uses a minimized Chrome window.')}>
+            <option value="hidden">Hidden: no window or tab at all</option>
+            <option value="minimized">Minimized window (in the Dock)</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="card"><h3>Gmail for verification emails</h3>
+        <p className="muted" style={{ marginBottom: 10 }}>Job sites often email a code or a link before you can sign in. With Gmail connected, auto-apply reads that email and finishes the step itself instead of stopping.</p>
+        <ul className="plain small muted" style={{ marginBottom: 12 }}>
+          <li><b>Read-only.</b> Google grants only the <code>gmail.readonly</code> permission: the app can never send, change or delete mail.</li>
+          <li><b>Narrow use.</b> It only looks at mail that arrived after the application started, from a job site, about verifying. Nothing is sent to the AI.</li>
+          <li><b>Your own Google client.</b> Create a free OAuth client (Desktop app) in Google Cloud and paste its ID and secret here. Steps are in REMOTE_AUTOMATION.md in the app folder. The sign-in token is kept in your Mac Keychain.</li>
+        </ul>
+        {!gm && <div className="grid2">
+          <label className="f"><span>OAuth client ID</span><input autoComplete="off" value={gmId} placeholder="….apps.googleusercontent.com" onChange={e => setGmId(e.target.value)} /></label>
+          <label className="f"><span>OAuth client secret</span><input type="password" autoComplete="off" value={gmSecret} onChange={e => setGmSecret(e.target.value)} /></label>
+        </div>}
+        <div className="rowx" style={{ marginTop: 12 }}>
+          {!gm && <button className="btn primary" onClick={connectGm} disabled={gmBusy || !gmId.trim() || !gmSecret.trim()}>{gmBusy && <span className="spin" />}{gmBusy ? 'Finish in your browser…' : 'Connect Gmail'}</button>}
+          {gm && <button className="btn" onClick={disconnectGm}>Disconnect</button>}
+          <span className={'pill' + (gm ? ' good' : '')}>{gm ? `Connected read-only: ${gm}` : 'Not connected'}</span>
+        </div>
       </div>
 
       <div className="card"><h3>Job sources</h3>
         <p className="muted">{curated} company job boards are built in, plus Job Bank Canada for Ontario. They include Amazon, AMD, Apple, Google, Microsoft, Netflix, NVIDIA, OpenAI, Anthropic, SpaceX and Y Combinator-backed hardware companies. Household names such as SpaceX, Apple, NVIDIA and Boeing are searched across the USA and Canada. Other large employers and startups are kept in Canada, and in the USA only for California, Texas, Florida and New York City. Small companies are kept only for Ontario jobs. Meta and Tesla block automated readers, so add their postings with Add a job by link.</p>
+        <label className="rowx small" style={{ alignItems: 'flex-start', marginTop: 12 }}>
+          <input type="checkbox" style={{ width: 'auto', marginTop: 3 }} checked={s.useSimplify !== false} onChange={e => save({ ...s, useSimplify: e.target.checked })} />
+          <span><b>SimplifyJobs internship list.</b> A public, community-kept list of thousands of internships, linked straight to each company's own careers page (most of what shows up on LinkedIn). Well-known employers it reveals are added to the boards above automatically.</span>
+        </label>
+        <label className="rowx small" style={{ alignItems: 'flex-start', marginTop: 8 }}>
+          <input type="checkbox" style={{ width: 'auto', marginTop: 3 }} checked={s.useLinkedInAlerts !== false} onChange={e => save({ ...s, useLinkedInAlerts: e.target.checked })} />
+          <span><b>LinkedIn job alerts (needs Gmail).</b> Reads the job-alert emails LinkedIn sends you. LinkedIn itself is never opened. A job also found on the company's careers site uses that copy; the rest link to LinkedIn for you to apply there. To get more: on LinkedIn, search e.g. "mechanical engineering intern", set a place, and turn on the job alert (daily, by email).</span>
+        </label>
         <Coverage state={state} />
         <h3 style={{ marginTop: 16 }}>Add a company</h3>
         <p className="muted small" style={{ marginBottom: 8 }}>Works for companies whose careers page runs on Greenhouse, Lever or Ashby. The board id is the company part of the careers link, e.g. <b>boards.greenhouse.io/<u>acme</u></b> or <b>jobs.lever.co/<u>acme</u></b>.</p>

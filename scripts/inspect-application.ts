@@ -27,6 +27,18 @@ const p = cur()
 console.log('URL:', p.url().slice(0, 200), '\nTITLE:', await p.title())
 console.log('FRAMES:', p.frames().map(f => f.url().slice(0, 90)).join(' , '))
 console.log('TEXT:', (await p.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 900))
+if (process.argv[3] === 'education') {
+  const expand = p.locator('button:visible, a:visible, [role="button"]:visible').filter({ hasText: /^\s*expand all sections\s*$/i }).first()
+  if (await expand.count()) { await expand.click().catch(() => {}); await p.waitForTimeout(3000) }
+  const res = { page: '', filled: [] as string[], skipped: [] as string[], drafted: [], note: '' }
+  const added = await _test.addSuccessFactorsEducation(p, await _test.collectAll(p), res as never)
+  console.log('added education entry:', added, res.filled.join(', '))
+  const again = await _test.addSuccessFactorsEducation(p, await _test.collectAll(p), res as never)
+  console.log('adds a second entry on refill:', again)
+  const major = (await _test.collectAll(p)).find(y => y.f.label === 'Major')
+  if (major) { await _test.fillStudy(p, major, 'Mechanical Engineering', false, res as never); console.log('major result:', res.filled.slice(-1).join(''), '| skipped:', res.skipped.join('; ')) }
+  for (const x of (await _test.collectAll(p)).filter(y => /education|school|degree|major|study|institution|graduat/i.test(`${y.f.section} ${y.f.label}`))) console.log(`  [${x.f.kind}] "${x.f.label.slice(0, 50)}" value="${x.f.value.slice(0, 40)}" section="${x.f.section.slice(0, 30)}" req=${x.f.required}`)
+} else {
 const job = db.listJobs().find(x => x.url === process.argv[2])!
 const tailored = db.getTailored(job.id)
 const { emptyProfile, emptyResume } = await import('../src/shared/types.ts')
@@ -37,5 +49,6 @@ console.log('DRAFTED:', (res.drafted || []).map((d: unknown) => JSON.stringify(d
 console.log('LEFT FOR YOU (' + res.skipped.length + '):\n  ' + res.skipped.join('\n  '))
 console.log('NOTE:', res.note)
 await p.waitForTimeout(2000)
+}
 await ctx.close()
 process.exit(0)

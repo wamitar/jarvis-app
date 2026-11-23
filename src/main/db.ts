@@ -86,9 +86,9 @@ export function countByCompany(): Record<string, number> {
   return out
 }
 export interface StoredRow { id: string; company: string; title: string; location: string; region: string; description: string }
-/** Removes untouched jobs that the current rules no longer allow. Jobs you applied to, saved, dismissed or tailored are left alone. */
+/** Removes new and saved jobs that the current rules no longer allow. Jobs you applied to, dismissed or tailored are left alone. */
 export function pruneJobs(allowed: (r: StoredRow) => boolean): number {
-  const rows = db.prepare("SELECT id, company, title, location, region, description FROM jobs WHERE status = 'new' AND id NOT IN (SELECT job_id FROM tailored)").all() as unknown as StoredRow[]
+  const rows = db.prepare("SELECT id, company, title, location, region, description FROM jobs WHERE status IN ('new', 'saved') AND id NOT IN (SELECT job_id FROM tailored)").all() as unknown as StoredRow[]
   const del = db.prepare('DELETE FROM jobs WHERE id = ?')
   let n = 0
   for (const r of rows) if (!allowed(r)) { del.run(r.id); n++ }

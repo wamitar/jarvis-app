@@ -1,5 +1,5 @@
 import type { RawJob, Region } from '../shared/types'
-import { KNOWN } from './companies'
+import { KNOWN, US_DEFENSE } from './companies'
 
 const ONTARIO = /\b(ontario|toronto|ottawa|mississauga|brampton|hamilton|waterloo|kitchener|cambridge, on|london, on|markham|vaughan|oakville|burlington|oshawa|windsor, on|guelph|kingston, on|barrie|sudbury|thunder bay|st\.? catharines|niagara|richmond hill|ajax|pickering|whitby|milton, on|kanata|peterborough|sarnia|woodstock, on|alliston|ingersoll|aurora, on|newmarket|concord, on|etobicoke|scarborough|north york|stoney creek|brantford|chatham|belleville|cornwall, on|bolton, on|tiverton|chalk river|clarington|darlington|gta)\b|,\s*ON\b|\bON,\s*(CA|CAN|Canada)\b/i
 const CANADA = /\b(canada|quebec|québec|montreal|montréal|british columbia|vancouver|alberta|calgary|edmonton|manitoba|winnipeg|saskatchewan|saskatoon|regina|nova scotia|halifax|new brunswick|newfoundland|victoria, bc|burnaby|richmond, bc|laval|longueuil|mirabel|saint-laurent|dorval)\b|,\s*(QC|BC|AB|MB|SK|NS|NB|NL|PE)\b|\bCAN\b/i
@@ -7,8 +7,10 @@ const US_STATES = 'AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD M
 const US_NAMES = 'alabama alaska arizona arkansas california colorado connecticut delaware florida georgia hawaii idaho illinois indiana iowa kansas kentucky louisiana maine maryland massachusetts michigan minnesota mississippi missouri montana nebraska nevada new hampshire|new jersey|new mexico|new york|north carolina|north dakota|ohio oklahoma oregon pennsylvania rhode island|south carolina|south dakota|tennessee texas utah vermont virginia washington west virginia|wisconsin wyoming'
 const USA = new RegExp(`\\b(united states|usa|u\\.s\\.a?\\.?|us-[a-z]{2}|${US_NAMES.replace(/ (?![a-z]+\|)/g, '|')})\\b|,\\s*(${US_STATES.split(' ').join('|')})\\b|\\bUS\\b|\\b(${US_STATES.split(' ').join('|')})\\s*-\\s|\\bUS,|-\\s*US\\b`, 'i')
 const ELSEWHERE = /\b(india|china|japan|korea|germany|france|united kingdom|uk|england|ireland|mexico|brazil|singapore|taiwan|israel|poland|netherlands|australia|new zealand|italy|spain|sweden|switzerland|malaysia|philippines|vietnam|thailand|czech|hungary|romania|austria|belgium|denmark|norway|finland|portugal|turkey|uae|dubai|saudi|egypt|south africa|costa rica|colombia|argentina|chile|bangalore|bengaluru|hyderabad|pune|chennai|shanghai|beijing|shenzhen|tokyo|munich|berlin|paris|london, (uk|england)|penang|auckland|armenia|yerevan|georgia, (ge|tbilisi)|tbilisi|bulgaria|croatia|estonia|latvia|lithuania|slovenia|iceland|cyprus|malta|luxembourg|slovakia|taipei|tel aviv|haifa|dublin|eemshaven|hong kong|indonesia|qatar|serbia|greece|ukraine|peru|morocco|kenya|nigeria|pakistan|bangladesh|sri lanka)\b/i
+// United Kingdom. A UK job is kept only at a well-known employer (KNOWN), the same bar as US jobs outside the four key areas.
+const UK = /\b(united kingdom|great britain|england|scotland|(?<!new south )wales|northern ireland|london|manchester|birmingham|bristol|derby|coventry|sheffield|leeds|glasgow|edinburgh|belfast|filton|broughton|swindon|milton keynes|gaydon|solihull|whitley|crewe|woking|silverstone|brackley|malmesbury|hullavington|culham|abingdon|stevenage|southampton|nottingham|liverpool|cardiff|aberdeen|newcastle upon tyne|sunderland|cambridge,\s*(uk|england|gb)|oxford,\s*(uk|england|gb)|reading,\s*(uk|england|berkshire))\b|\b(UK|GB|GBR)\b/i
 // Three-letter country codes, as Amazon and Boeing write them ("Luxembourg, LUX", "GBR - Hounslow").
-const ISO3_ELSEWHERE = /\b(SGP|LUX|GBR|DEU|ITA|POL|IND|JPN|CHN|FRA|ESP|MEX|BRA|AUS|IRL|NLD|ISR|KOR|TWN|CZE|ROU|CRI|ARE|SAU|ZAF|QAT|MYS|PHL|SWE|CHE|BEL|AUT|TUR|EGY|COL|ARG|CHL|SVK|HUN|PRT|DNK|NOR|FIN|NZL|VNM|THA|IDN|HKG|SRB|GRC|UKR|BGR|JOR|BHR|KWT|OMN|MAR)\b/
+const ISO3_ELSEWHERE = /\b(SGP|LUX|DEU|ITA|POL|IND|JPN|CHN|FRA|ESP|MEX|BRA|AUS|IRL|NLD|ISR|KOR|TWN|CZE|ROU|CRI|ARE|SAU|ZAF|QAT|MYS|PHL|SWE|CHE|BEL|AUT|TUR|EGY|COL|ARG|CHL|SVK|HUN|PRT|DNK|NOR|FIN|NZL|VNM|THA|IDN|HKG|SRB|GRC|UKR|BGR|JOR|BHR|KWT|OMN|MAR)\b/
 
 // The four US areas where lesser-known employers are still kept. New York means the city, not the state.
 const KEY_US = new RegExp([
@@ -18,6 +20,8 @@ const KEY_US = new RegExp([
 ].join('|'), 'i')
 /** True when a US location is in California, Texas, Florida or New York City. */
 export const inKeyUsArea = (location: string): boolean => KEY_US.test(location || '')
+/** UK jobs are kept only at well-known employers. */
+export const ukAllowed = (company: string): boolean => KNOWN.has(company)
 /** Whether a job's US location is allowed for this employer: anywhere for household names, the four key areas for everyone else. */
 export const usAllowed = (company: string, location: string): boolean => KNOWN.has(company) || inKeyUsArea(location)
 // Big employers that post one pooled internship for all teams, with a description too general to mention mechanical work.
@@ -63,6 +67,8 @@ export function durations(text: string, needContext = true): [number, number][] 
 export function termProblem(title: string, description: string): string {
   // PEY (Professional Experience Year) is a 12 to 16 month placement.
   if (/\bPEY\b|professional experience year/i.test(title)) return 'PEY placement (12 to 16 months)'
+  // UK placement years (sandwich year, year in industry) run about 12 months.
+  if (/placement year|year[- ]in[- ]industry|industrial placement|sandwich (year|placement)|year[- ]long placement/i.test(title)) return 'UK placement year (about 12 months)'
   const stated = [...durations(title, false), ...durations(description)]
   if (!stated.length) return ''
   // A posting fits when any length it offers overlaps the wanted range (16 weeks counts as 4 months).
@@ -82,7 +88,10 @@ const US_PERSON = [
   /\bU\.?\s?S\.?\s+citizenship\b[^.]{0,40}\b(is |are )?(required|a (pre-?requisite|requirement)|needed)/i,
   // Only a U.S. clearance: Canadian site-access or government clearances are open to the candidate.
   /\b(U\.?\s?S\.?|DoD|DOD|department of defense)\b[^.]{0,40}\bclearance\b|\bclearance\b[^.]{0,60}\bU\.?\s?S\.?\s+citizen/i,
-  /\blawful(ly)?\s+(u\.?s\.?\s+)?permanent resident|green card holder/i
+  /\blawful(ly)?\s+(u\.?s\.?\s+)?permanent resident|green card holder/i,
+  // UK roles that need British nationality or SC/DV security clearance (years of UK residence), which the candidate cannot get.
+  /\b(british|uk)\s+(citizens?|nationals?|nationality)\b[^.]{0,60}\b(only|required|requirement|must)\b|\b(must|required to|need to)\b[^.]{0,40}\b(british|uk)\s+(citizen|national)/i,
+  /\b(SC|DV|[Ss]ecurity [Cc]heck)\s*(\(SC\)\s*)?(level\s+)?([Ss]ecurity\s+)?[Cc]learance\b|\b(eligible|able) (for|to obtain|to gain)\b[^.]{0,30}\b(SC|DV)\b(?!\w)/
 ]
 /** The sentence that makes a posting U.S.-person-only, or '' when there is none. */
 export function usPersonOnly(text: string): string {
@@ -94,16 +103,63 @@ export function usPersonOnly(text: string): string {
   }
   return ''
 }
-/** Rules that need the posting's own text: U.S. person only, and term length. */
-export function textProblem(title: string, description: string): string {
-  if (usPersonOnly(`${title}\n${description}`)) return 'U.S. persons only (export control, citizenship or clearance)'
+// ---- Visa sponsorship. In a country where the profile says the candidate needs sponsorship, postings that refuse it are dropped.
+export const NEEDS_SPONSOR = { canada: false, usa: false, uk: false }
+type SponsorCountry = keyof typeof NEEDS_SPONSOR
+const countryOf = (region: string): SponsorCountry | null => (region === 'ontario' || region === 'canada' ? 'canada' : region === 'usa' ? 'usa' : region === 'uk' ? 'uk' : null)
+/** Loads the profile's term length and per-country sponsorship answers into the filter. */
+export function setRulesFromProfile(p: { termLength?: string; needsSponsorship?: string; sponsorshipUsa?: string; sponsorshipUk?: string }): void {
+  setTermFromProfile(p.termLength || '')
+  NEEDS_SPONSOR.canada = /^yes$/i.test(p.needsSponsorship || '')
+  NEEDS_SPONSOR.usa = /^yes$/i.test(p.sponsorshipUsa || '')
+  NEEDS_SPONSOR.uk = /^yes$/i.test(p.sponsorshipUk || '')
+}
+const SPONSOR_WORD = String.raw`(?:visa|immigration|employment|work|employer|h-?1b|work permit)?\s*sponsor(?:ship|ing|ed)?`
+// The bare verb counts only when it is about visas or people ("sponsor visas", "sponsor candidates"), not "sponsor events".
+const SPONSOR_VISA = String.raw`(?:visa|immigration|employment|work|employer|h-?1b|work permit)?\s*sponsorship|sponsor(?:ing)?\s+(?:any\s+)?(?:\w+\s+)?(?:visas?|candidates?|applicants?|employment|work|immigration|h-?1b|individuals|international|students?|interns?)\b`
+const NO_SPONSOR = [
+  // "unable to sponsor", "will not provide visa sponsorship", "does not offer sponsorship"
+  new RegExp(String.raw`\b(unable|not able|cannot|can ?not|can't|will not|won't|do not|don't|does not|doesn't|are not able|is not able|not in a position)\b[^.]{0,30}?\b(provide|offer|support|consider|extend|be able to)?\s*(any\s+)?(an?\s+)?(${SPONSOR_VISA})`, 'i'),
+  // "sponsorship is not available", "sponsorship will not be provided"
+  new RegExp(String.raw`${SPONSOR_WORD}\s+(is|are|will|can)\s+not\s+(be\s+)?(available|provided|offered|considered|supported|possible)`, 'i'),
+  // "no visa sponsorship", "not eligible for sponsorship"
+  new RegExp(String.raw`\bno\s+${SPONSOR_WORD}|\bnot\s+(eligible|available)\s+for\s+${SPONSOR_WORD}`, 'i'),
+  // "must be authorized to work ... without sponsorship", "must not require sponsorship now or in the future"
+  new RegExp(String.raw`\bwithout\s+(the\s+need\s+for\s+|requiring\s+|need\s+of\s+)?(current\s+or\s+future\s+|present\s+or\s+future\s+|now\s+or\s+in\s+the\s+future\s+)?(company\s+|employer\s+)?${SPONSOR_WORD}|\b(must|should)\s+not\s+(now\s+or\s+in\s+the\s+future\s+)?(need|require)\b[^.]{0,30}${SPONSOR_WORD}`, 'i')
+]
+/** The sentence that says a posting will not sponsor a visa, or '' when there is none. */
+export function noSponsorship(text: string): string {
+  for (const re of NO_SPONSOR) {
+    const m = re.exec(text || '')
+    if (m) return text.slice(Math.max(0, (m.index ?? 0) - 30), (m.index ?? 0) + m[0].length + 30).replace(/\s+/g, ' ').trim()
+  }
+  return ''
+}
+
+/** Rules that need the posting's own text: citizens only, visa sponsorship (when the region is known) and term length. */
+export function textProblem(title: string, description: string, region = ''): string {
+  if (usPersonOnly(`${title}\n${description}`)) return 'citizens only (U.S. export control, citizenship or clearance, or UK nationality or clearance)'
+  const c = countryOf(region)
+  if (c && NEEDS_SPONSOR[c] && noSponsorship(description)) return 'does not sponsor work visas'
   return termProblem(title, description)
 }
 
+// A US state code after the city ("Burlington, MA", "Vancouver, WA", "London, KY") settles the country, even when
+// the city shares its name with a Canadian or British one. ", CA" is left out: it can mean Canada as well as California.
+const US_STATE_AFTER_CITY = new RegExp(`,\\s*(${US_STATES.split(' ').filter(s => s !== 'CA').join('|')})\\b`)
+const REGION_RANK: (Region | 'unknown')[] = ['ontario', 'canada', 'uk', 'usa', 'other', 'unknown']
+
+/** The region of a location; a list of places ("Toronto, ON; Austin, TX") counts as its most wanted place. */
 export function regionOf(location: string): Region | 'unknown' {
-  const loc = location || ''
+  const parts = (location || '').split(/;|\s\/\s|\s\|\s/).map(s => s.trim()).filter(Boolean)
+  if (parts.length < 2) return regionOne(location || '')
+  return parts.map(regionOne).sort((a, b) => REGION_RANK.indexOf(a) - REGION_RANK.indexOf(b))[0]
+}
+function regionOne(loc: string): Region | 'unknown' {
+  if (US_STATE_AFTER_CITY.test(loc) && !/canada|united kingdom|\bUK\b/i.test(loc)) return 'usa'
   if (ONTARIO.test(loc)) return 'ontario'
   if (CANADA.test(loc)) return 'canada'
+  if (UK.test(loc) && !USA.test(loc.replace(UK, ''))) return 'uk'
   if ((ELSEWHERE.test(loc) || ISO3_ELSEWHERE.test(loc)) && !USA.test(loc)) return 'other'
   if (USA.test(loc)) return 'usa'
   return 'unknown'
@@ -124,9 +180,11 @@ export function checkJob(j: RawJob): FilterVerdict & { needBody?: boolean } {
   // employer hires in North America, so those are kept and the location is pinned down from the posting later.
   const raw = regionOf(j.location)
   const vague = raw === 'unknown'
-  if (raw === 'other' || (vague && !j.big)) return { keep: false, region: 'other', reason: 'outside North America or location unclear' }
+  if (raw === 'other' || (vague && !j.big)) return { keep: false, region: 'other', reason: 'outside Canada, the USA and the UK, or location unclear' }
+  if (raw === 'uk' && !ukAllowed(j.company)) return { keep: false, region: 'uk', reason: 'UK job at a lesser-known employer' }
   const region: Region = vague ? 'usa' : raw
   if (region !== 'ontario' && !j.big) return { keep: false, region, reason: 'not a large employer outside Ontario' }
+  if (region === 'usa' && US_DEFENSE.has(j.company)) return { keep: false, region, reason: 'U.S. defense employer (U.S. persons only)' }
   // A vague location is let through here and settled once the posting itself has been read (see refresh.ts).
   if (raw === 'usa' && !usAllowed(j.company, j.location)) return { keep: false, region, reason: 'lesser-known employer outside California, Texas, Florida and New York City' }
   const title = j.title
@@ -137,12 +195,14 @@ export function checkJob(j: RawJob): FilterVerdict & { needBody?: boolean } {
   const tp = termProblem(title, '')
   if (tp) return { keep: false, region, reason: tp }
   // The U.S.-person and term-length rules need the posting text, so a posting without it is always read first.
-  if (j.description) { const why = textProblem(title, j.description); if (why) return { keep: false, region, reason: why } }
+  if (j.description) { const why = textProblem(title, j.description, region); if (why) return { keep: false, region, reason: why } }
   const needLoc = (vague && j.source === 'workday') || !j.description
   if (mechInTitle) return { keep: true, region, reason: 'mechanical internship', needBody: needLoc || undefined }
   if (!ME_TITLE.test(title)) return { keep: false, region, reason: 'title is not engineering' }
   // Engineering-flavoured title without "mechanical": needs the description to mention ME work.
   if (!j.description) return { keep: true, region, reason: 'needs description check', needBody: true }
+  // A LinkedIn alert carries no posting text (LinkedIn is never opened), so an engineering title is enough there.
+  if (j.source === 'linkedin') return { keep: true, region, reason: 'engineering internship from a LinkedIn alert' }
   if (POOLED.test(title) && KNOWN.has(j.company)) return { keep: true, region, reason: 'pooled hardware internship at a large employer', needBody: needLoc || undefined }
   return ME_BODY.test(j.description)
     ? { keep: true, region, reason: 'engineering internship that mentions mechanical work', needBody: needLoc || undefined }

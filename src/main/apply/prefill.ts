@@ -1,26 +1,62 @@
+import { readFileSync } from 'node:fs'
 // Opens the application page in the user's Chrome (own profile folder) and fills it in.
 // Every control on the page is read (text, dropdowns, radio groups, tick boxes, searchable pickers),
 // Claude decides every answer it can infer from the profile, resume and posting, and the app types
-// them in. It never clicks Submit and never solves CAPTCHAs: those stay with the user.
+// them in. Pre-fill never clicks Submit (only auto-apply does, in autoapply.ts) and never solves CAPTCHAs.
 import { begin, checkStop, isStopping } from '../activity'
 import { chromium, type BrowserContext, type Frame, type Locator, type Page } from 'playwright-core'
-import type { Job, PrefillResult, Profile, Resume, Tailored } from '../../shared/types'
+import type { DocFile, Job, PrefillResult, Profile, Resume, Tailored } from '../../shared/types'
+import { documentFor } from '../docs'
 import { resumeToText } from '../../shared/types'
-import { askJson } from '../ai/claude'
+import { aiName, askJson } from '../ai/claude'
 
 let context: BrowserContext | null = null
 let page: Page | null = null
 
-async function getPage(profileDir: string): Promise<Page> {
+let contextHidden = false
+
+/**
+ * The user's own Chrome version, so a hidden (headless) browser can describe itself like a normal Chrome window.
+ * Headless Chrome otherwise says "HeadlessChrome" in every request, which some job sites treat as a robot.
+ */
+function chromeUserAgent(): string | undefined {
+  try {
+    const plist = readFileSync('/Applications/Google Chrome.app/Contents/Info.plist', 'utf8')
+    const major = plist.match(/<key>CFBundleShortVersionString<\/key>\s*<string>(\d+)\./)?.[1]
+    return major ? `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36` : undefined
+  } catch { return undefined }
+}
+
+/**
+ * The application browser. hidden = no window at all (headless Chrome, same profile and sign-ins); used by
+ * auto-apply. Not hidden = a normal window, for "Open application" where the user watches and finishes the form.
+ * Switching between the two restarts Chrome (one profile can only be open once).
+ */
+async function getPage(profileDir: string, hidden = false): Promise<Page> {
   if (context) { try { context.pages() } catch { context = null } }
+  if (context && contextHidden !== hidden) await closeBrowser()
   if (!context) {
-    context = await chromium.launchPersistentContext(profileDir, { channel: 'chrome', headless: false, viewport: null })
+    // Chrome pauses timers and drawing in a minimized window; these flags keep filling working while it stays out of the way.
+    const args = ['--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--disable-background-timer-throttling']
+    context = await chromium.launchPersistentContext(profileDir, hidden
+      ? { channel: 'chrome', headless: true, viewport: { width: 1440, height: 1000 }, userAgent: chromeUserAgent(), args }
+      : { channel: 'chrome', headless: false, viewport: null, args })
+    contextHidden = hidden
     context.on('close', () => { context = null; page = null })
   }
   if (!page || page.isClosed()) page = context.pages().find(p => !p.isClosed()) || await context.newPage()
   return page
 }
 
+/** Minimizes the application browser's window, so auto-apply never takes over the screen. */
+export async function minimize(p: Page): Promise<void> {
+  try {
+    const s = await p.context().newCDPSession(p)
+    const { windowId } = await s.send('Browser.getWindowForTarget') as { windowId: number }
+    await s.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } })
+    await s.detach()
+  } catch { /* window already gone */ }
+}
 export async function closeBrowser(): Promise<void> { try { await context?.close() } catch { /* already closed */ } context = null; page = null }
 
 // ---------------------------------------------------------------------------------------------
@@ -53,6 +89,30 @@ function collectFields(startIdx: number): Field[] {
     const r = el.getBoundingClientRect(); const cs = getComputedStyle(el)
     return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none'
   }
+  /** Transparent, or tucked inside a zero-height box that clips its contents (as Oracle hides its bot trap). */
+  const hiddenByAncestor = (el: Element): boolean => {
+    for (let a: Element | null = el; a && a !== document.body; a = a.parentElement) {
+      const cs = getComputedStyle(a)
+      if (cs.opacity === '0') return true
+      if (a !== el && cs.overflow !== 'visible' && a.getBoundingClientRect().height < 2) return true
+    }
+    return false
+  }
+  /**
+   * Bot traps (Oracle's "honeypot" input): a field people never see, so only a robot fills it, and filling it
+   * gets the application thrown out. Caught by name, or by being off-screen, transparent or hidden from screen readers.
+   */
+  const isTrap = (el: HTMLElement): boolean => {
+    const id = `${el.getAttribute('name') || ''} ${el.id} ${el.className} ${el.getAttribute('aria-label') || ''}`
+    if (/honey.?pot|bot.?trap|\bhp[_-]|leave (this )?(blank|empty)|do not fill/i.test(id)) return true
+    // Custom radios, checkboxes, file pickers and dropdowns are often transparent on purpose; only text boxes are judged by layout.
+    const t = el.tagName === 'TEXTAREA' ? 'textarea' : el.tagName === 'INPUT' ? ((el as HTMLInputElement).type || 'text') : ''
+    if (!['text', 'email', 'tel', 'url', 'number', 'search', 'textarea'].includes(t)) return false
+    if (el.closest('[aria-hidden="true"]')) return true
+    const r = el.getBoundingClientRect()
+    if (r.right < -100 || r.bottom < -100 || r.left < -2000 || r.top < -2000) return true
+    return hiddenByAncestor(el)
+  }
   const hasControl = (el: Element): boolean => !!el.querySelector('input:not([type=hidden]), select, textarea, button[aria-haspopup]')
   const ownLabel = (el: HTMLElement): { text: string; star: boolean } => {
     const raw = (t: string | null | undefined) => ({ text: clean(t), star: /[*✱∗]/.test(t || '') })
@@ -69,7 +129,8 @@ function collectFields(startIdx: number): Field[] {
     let p: HTMLElement | null = el.parentElement
     for (let depth = 0; depth < 7 && p && p !== document.body; depth++, p = p.parentElement) {
       const cands = Array.from(p.querySelectorAll<HTMLElement>('legend, label, h1, h2, h3, h4, h5, h6, p, span, div'))
-        .filter(c => (c.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) && !c.contains(el) && !hasControl(c) &&
+        // Hidden text (the label of Oracle's invisible "honeypot" box) is never the question a visible field asks.
+        .filter(c => (c.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) && !c.contains(el) && !hasControl(c) && visible(c) && !hiddenByAncestor(c) &&
           !Array.from(skip).some(s => s.contains(c)) && clean(c.textContent).length >= 2 && clean(c.textContent).length < 500)
       if (cands.length) { const c = cands[cands.length - 1]; return { text: clean(c.textContent), star: /[*✱∗]/.test(c.textContent || '') } }
     }
@@ -120,6 +181,7 @@ function collectFields(startIdx: number): Field[] {
     const input = el as HTMLInputElement
     const type = (el.tagName === 'INPUT' ? input.type || 'text' : el.tagName.toLowerCase()).toLowerCase()
     if (['hidden', 'submit', 'button', 'image', 'reset', 'password'].includes(type) || input.disabled) continue
+    if (isTrap(el)) continue
     const section = sectionOf(el)
     if (type === 'radio' || type === 'checkbox') {
       if (!optVisible(input)) continue
@@ -211,6 +273,20 @@ function collectFields(startIdx: number): Field[] {
       value: input.value || '', options: [], maxLength: input.maxLength > 0 ? input.maxLength : 0, multi: false }, [el])
   }
   // Workday (and some others) draw dropdowns as buttons that open a list.
+  // SAP UI5 date pickers (SuccessFactors): the typing box sits inside the component's shadow DOM, out of reach of
+  // the input scan above. The component itself carries the label, the format and whether it is required.
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>('ui5-date-picker, ui5-date-picker-xweb-calendar-widget, ui5-daterange-picker'))) {
+    if (!visible(el)) continue
+    const pattern = el.getAttribute('format-pattern') || 'MM/dd/yyyy'
+    // Only plain numeric patterns are typed; others (e.g. "MMM d, y") are left to the user.
+    if (!/^(MM|dd|yyyy)([/.-](MM|dd|yyyy)){2}$/.test(pattern)) continue
+    const fmt = pattern.replace(/yyyy/, 'YYYY').replace(/dd/, 'DD')
+    const field = el.closest('.RCMFormField, .rcmFormElement, [class*="FormField"]')
+    const lab = field?.querySelector('label')
+    const text = clean(lab?.textContent) || el.getAttribute('accessible-name') || el.getAttribute('title') || 'Date'
+    push({ kind: 'wddate', inputType: 'date ' + fmt, label: text.replace(/^\*\s*/, ''), question: '', section: sectionOf(el), name: 'ui5date',
+      required: el.hasAttribute('required') || !!lab?.querySelector('.requiredField'), value: el.getAttribute('value') || '', options: [], maxLength: 0, multi: false }, [el])
+  }
   for (const el of Array.from(document.querySelectorAll<HTMLElement>('button[aria-haspopup="listbox"]'))) {
     if (!visible(el) || (el as HTMLButtonElement).disabled) continue
     const cur = clean(el.textContent)
@@ -298,11 +374,15 @@ async function typeInto(loc: Locator, value: string, keystrokes: boolean): Promi
   await loc.evaluate((e: HTMLElement) => e.blur()).catch(() => {})
 }
 
-async function clickOption(frame: Frame, want: string): Promise<string | null> {
+type Chooser = (options: string[]) => number
+async function clickOption(frame: Frame, want: string, choose?: Chooser): Promise<string | null> {
   const opts = await visibleOptions(frame)
-  const i = bestOption(opts, want)
+  const i = choose ? choose(opts) : bestOption(opts, want)
   if (i < 0) return null
-  const loc = frame.locator(OPT).filter({ hasText: opts[i] })
+  // The whole text must match: "Electro-Mechanical Engineering" contains "Mechanical Engineering" too.
+  const exact = new RegExp(`^\\s*${opts[i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')}\\s*$`, 'i')
+  let loc = frame.locator(OPT).filter({ hasText: exact })
+  if (!(await loc.count().catch(() => 0))) loc = frame.locator(OPT).filter({ hasText: opts[i] })
   const n = await loc.count()
   for (let k = 0; k < n; k++) {
     const o = loc.nth(k)
@@ -332,7 +412,7 @@ async function clearSearch(loc: Locator): Promise<void> {
   await loc.press('Backspace').catch(() => {})
 }
 
-async function pickInCombobox(frame: Frame, loc: Locator, value: string, workday: boolean): Promise<string | null> {
+async function pickInCombobox(frame: Frame, loc: Locator, value: string, workday: boolean, choose?: Chooser): Promise<string | null> {
   await closeLists(frame)
   // With items already chosen, Workday's list of them covers the search box: focus it rather than click through.
   if ((await frame.locator('[data-automation-id="selectedItem"]').count().catch(() => 0)) > 0) await loc.focus()
@@ -342,9 +422,13 @@ async function pickInCombobox(frame: Frame, loc: Locator, value: string, workday
   // Workday searches on Enter. Anywhere else Enter can submit the form, so it is never pressed there.
   if (workday) await loc.press('Enter').catch(() => {})
   await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 4000 }).catch(() => {})
-  await frame.page().waitForTimeout(workday ? 900 : 300)
-  let shown = await settledOptions(frame, value, workday)
-  let picked = await clickOption(frame, value)
+  // SuccessFactors fetches its list from the server as you type, like Workday: wait for the matching option
+  // instead of choosing from whatever is on screen after a fixed pause.
+  const slow = workday || /successfactors|sapsf/i.test(frame.page().url())
+  await frame.page().waitForTimeout(slow ? 900 : 300)
+  let shown = await settledOptions(frame, value, slow, choose)
+  if (workday && choose && choose(shown) < 0) shown = await scrollForOption(frame, choose)
+  let picked = await clickOption(frame, value, choose)
   // Workday's search can come back empty for a full phrase ("Mechanical Engineering") yet find it by its key word.
   const keyWords = norm(value).split(' ').filter(t => !GENERIC.has(t) && t.length > 2)
   if (!picked && workday && keyWords.length && keyWords.join(' ') !== norm(value)) {
@@ -352,8 +436,9 @@ async function pickInCombobox(frame: Frame, loc: Locator, value: string, workday
     await loc.pressSequentially(keyWords[0], { delay: 25 })
     await loc.press('Enter').catch(() => {})
     await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 4000 }).catch(() => {})
-    shown = await settledOptions(frame, value, true)
-    picked = await clickOption(frame, value)
+    shown = await settledOptions(frame, value, true, choose)
+    if (choose && choose(shown) < 0) shown = await scrollForOption(frame, choose)
+    picked = await clickOption(frame, value, choose)
   }
   if (!picked) {
     // Search text did not match an option: clear it and pick from the full list instead.
@@ -363,7 +448,7 @@ async function pickInCombobox(frame: Frame, loc: Locator, value: string, workday
     await loc.focus().catch(() => {}); await loc.press('ArrowDown').catch(() => {})   // reopen the full list
     await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 2000 }).catch(() => {})
     shown = await visibleOptions(frame)
-    picked = await clickOption(frame, value)
+    picked = await clickOption(frame, value, choose)
   }
   if (picked) {
     // Two-level lists (Workday "How did you hear about us?"): a category opens a sub-list.
@@ -372,21 +457,43 @@ async function pickInCombobox(frame: Frame, loc: Locator, value: string, workday
     // Only a list that is entirely new counts as a sub-list. If the same results are still showing (a long
     // field-of-study list, say), nothing more is clicked: picking its first entry would choose the wrong thing.
     const isSubList = sub.length > 0 && !sub.includes(picked) && !sub.some(o => shown.includes(o))
-    if (isSubList) { const second = await clickOption(frame, value) || (await frame.locator(OPT + ':visible').first().click().then(() => sub[0]).catch(() => null)); if (second) picked += ' › ' + second }
+    if (isSubList) { const second = await clickOption(frame, value, choose) || (await frame.locator(OPT + ':visible').first().click().then(() => sub[0]).catch(() => null)); if (second) picked += ' › ' + second }
   }
   if (!picked) { lastSeen = shown.slice(0, 8); await clearSearch(loc) }
   await frame.page().keyboard.press('Escape').catch(() => {})
   return picked
 }
+/**
+ * Workday renders a long result list in batches as it is scrolled, so the wanted option can exist but not be on
+ * screen yet (KLA lists "Mechanical Engineering" 13th of 26 for that search). Scrolls the open list until the
+ * chooser finds it or the list stops growing. Returns the options seen last.
+ */
+async function scrollForOption(frame: Frame, choose: Chooser): Promise<string[]> {
+  let opts = await visibleOptions(frame), still = 0
+  for (let k = 0; k < 20 && choose(opts) < 0 && still < 2; k++) {
+    await frame.locator('[role="listbox"]:visible').last().evaluate((e: HTMLElement) => {
+      // The list itself or its nearest scrolling parent.
+      let el: HTMLElement | null = e
+      while (el && el.scrollHeight <= el.clientHeight + 2) el = el.parentElement
+      if (el) el.scrollTop += Math.max(200, el.clientHeight - 40)
+      else (e.querySelector('[role="option"]:last-child') as HTMLElement | null)?.scrollIntoView({ block: 'end' })
+    }).catch(() => {})
+    await frame.page().waitForTimeout(450)
+    const now = await visibleOptions(frame)
+    still = now.join('|') === opts.join('|') ? still + 1 : 0
+    opts = now
+  }
+  return opts
+}
 /** The options on screen the last time a picker found no match, so the report can say what the list offered. */
 let lastSeen: string[] = []
 
 /** Waits for a picker's results to stop changing (Workday loads them after the search), up to about 6 seconds. */
-async function settledOptions(frame: Frame, want: string, workday: boolean): Promise<string[]> {
+async function settledOptions(frame: Frame, want: string, workday: boolean, choose?: Chooser): Promise<string[]> {
   let prev = await visibleOptions(frame)
   if (!workday) return prev
   for (let i = 0; i < 14; i++) {
-    if (bestOption(prev, want) >= 0) return prev
+    if ((choose ? choose(prev) : bestOption(prev, want)) >= 0) return prev
     await frame.page().waitForTimeout(400)
     const now = await visibleOptions(frame)
     if (i >= 4 && now.length && now.join('|') === prev.join('|')) return now
@@ -399,7 +506,12 @@ async function settledOptions(frame: Frame, want: string, workday: boolean): Pro
 // Deciding answers
 
 type Rule = [RegExp, (p: Profile, job: Job) => string]
-const usJob = (job: Job): boolean => job.region === 'usa'
+/** The job's country, and the candidate's work authorization and sponsorship answers for that country. */
+export function eligibilityFor(job: Job, p: Profile): { country: string; authorized: string; sponsorship: string } {
+  if (job.region === 'usa') return { country: 'United States', authorized: p.workAuthUsa, sponsorship: p.sponsorshipUsa }
+  if (job.region === 'uk') return { country: 'United Kingdom', authorized: p.workAuthUk, sponsorship: p.sponsorshipUk }
+  return { country: 'Canada', authorized: p.workAuthCanada, sponsorship: p.needsSponsorship }
+}
 /** Plain mapping, used when Claude is unavailable. */
 const RULES: Rule[] = [
   [/first.?name|given.?name|prénom/i, p => p.firstName],
@@ -412,8 +524,8 @@ const RULES: Rule[] = [
   [/github/i, p => p.github],
   [/website|portfolio|personal (site|url)/i, p => p.website],
   [/citizen/i, p => p.citizenship],
-  [/sponsor/i, p => p.needsSponsorship],
-  [/authori[sz]ed|legally (able|entitled|permitted)|eligible to work|right to work|work permit/i, (p, j) => (usJob(j) ? p.workAuthUsa : p.workAuthCanada)],
+  [/sponsor/i, (p, j) => eligibilityFor(j, p).sponsorship],
+  [/authori[sz]ed|legally (able|entitled|permitted)|eligible to work|right to work|work permit/i, (p, j) => eligibilityFor(j, p).authorized],
   [/relocat/i, p => p.willingToRelocate],
   [/gpa|grade point|cumulative average/i, p => p.gpa],
   [/graduat|completion date/i, p => p.graduation],
@@ -427,6 +539,95 @@ const RULES: Rule[] = [
   [/province|\bstate\b/i, p => p.province],
   [/country/i, p => p.country]
 ]
+/**
+ * Picks the option naming the candidate's major: it must contain the major's key words ("mechanical"), and an exact
+ * name beats "Engineering, Mechanical", which beats "... Technology" or "... Technician". Nothing else is ever chosen.
+ */
+// Degree words that may sit around a discipline's name without changing it ("Bachelor of Mechanical Engineering (BEng)").
+const DEGREE_WORDS = new Set(['bachelor', 'bachelors', 's', 'b', 'ba', 'bs', 'bsc', 'basc', 'beng', 'bse', 'master', 'masters', 'ms', 'msc', 'meng', 'honours', 'honors', 'hons', 'major', 'program', 'programme', 'undergraduate'])
+/** The words that name the discipline itself: "Electro-Mechanical Engineering" gives electro + mechanical. */
+const disciplineWords = (s: string): string[] => norm(s).split(' ').filter(t => t && !GENERIC.has(t) && !DEGREE_WORDS.has(t))
+/** True when an option names exactly the major, and not a neighbouring discipline that shares a word with it. */
+const sameDiscipline = (option: string, major: string): boolean => {
+  const a = disciplineWords(option), b = disciplineWords(major)
+  // "Mechanical Engineering Technology" is a technician program, not the degree (unless that is the major).
+  if (/technolog|technician/i.test(option) && !/technolog|technician/i.test(major)) return false
+  return !!b.length && a.length === b.length && b.every(k => a.includes(k))
+}
+/**
+ * Picks the major from a list. Strict: only the exact discipline ("Mechanical Engineering", "Engineering,
+ * Mechanical"). Loose (the last resort): any option naming it, preferring the closest.
+ */
+function studyChooser(major: string, strict = false): Chooser {
+  const want = norm(major)
+  const key = want.split(' ').filter(t => !GENERIC.has(t))
+  return options => {
+    const n = options.map(o => (PLACEHOLDER.test(o.trim()) ? '' : norm(o)))
+    if (!key.length) return bestOption(options, major)
+    if (strict) {
+      let best = -1
+      n.forEach((o, i) => { if (o && sameDiscipline(o, major) && (best < 0 || o.length < n[best].length)) best = i })
+      return best
+    }
+    const rank = (o: string): number => {
+      if (o === want || o === `engineering ${key.join(' ')}`) return 0
+      if (/technolog|technician/.test(o)) return 4
+      // A neighbouring discipline that shares the word ("electro mechanical") is a worse fit than the plain one.
+      const extra = disciplineWords(o).length - key.length
+      return (/engineering/.test(o) ? 1 : 2) + (extra > 0 ? 1 : 0)
+    }
+    let best = -1
+    n.forEach((o, i) => {
+      if (!o || !key.every(k => ` ${o} `.includes(` ${k} `))) return
+      if (best < 0 || rank(o) < rank(n[best]) || (rank(o) === rank(n[best]) && o.length < n[best].length)) best = i
+    })
+    return best
+  }
+}
+/** The ways a major is searched for, in order: as written, "Engineering, Mechanical", then the key word alone. */
+function studyTerms(major: string): string[] {
+  const key = norm(major).split(' ').filter(t => !GENERIC.has(t))
+  const m = major.trim().match(/^(.+?)\s+engineering$/i)
+  return [...new Set([major.trim(), m ? `Engineering, ${m[1]}` : '', key.map(k => k[0].toUpperCase() + k.slice(1)).join(' ')].filter(Boolean))]
+}
+const isStudy = (f: Field): boolean => STUDY.test(`${f.label} ${f.question}`) && ['combobox', 'dropdown', 'select', 'radio', 'text'].includes(f.kind) && !/minor|other|if (other|not)|specify/i.test(f.label)
+const showsMajor = (value: string, major: string): boolean => { const key = norm(major).split(' ').filter(t => !GENERIC.has(t)); const v = ` ${norm(value)} `; return !!value.trim() && key.every(k => v.includes(` ${k} `)) }
+
+/** Fills a field-of-study field with the profile's major by rule (never by Claude), then reads it back to be sure. */
+async function fillStudy(p: Page, x: Located, major: string, workday: boolean, res: PrefillResult): Promise<void> {
+  const { frame, f } = x
+  const label = short(f)
+  const choose = studyChooser(major)
+  const loc = frame.locator(`[data-ih-idx="${f.idx}"]`).first()
+  if (f.kind === 'text') { await typeInto(loc, major, workday); res.filled.push(`${label}: ${major}`); return }
+  if (f.kind === 'combobox') {
+    let lastOffered: string[] = []
+    // First every search term looking for the exact discipline; only then the closest option. Workday's search can
+    // list a neighbour first ("Electro-Mechanical Engineering" for "Mechanical Engineering"), which is not the major.
+    for (const strict of [true, false]) {
+      for (const term of studyTerms(major)) {
+        const got = await pickInCombobox(frame, loc, term, workday, strict ? studyChooser(major, true) : choose).catch(() => null)
+        if (!got) { lastOffered = lastSeen; continue }
+        await p.waitForTimeout(500)
+        const now = (await collectAll(p)).find(y => y.f.idx === f.idx || (y.f.label === f.label && y.f.section === f.section))
+        const shown = now?.f.value || got
+        const fits = strict ? sameDiscipline(shown, major) || sameDiscipline(got, major) : showsMajor(shown, major) || showsMajor(got, major)
+        if (!now || fits) { res.filled.push(`${label}: ${got}${strict ? '' : ` (closest option; this list has no plain "${major}")`}`); return }
+        lastOffered = [shown]
+        // A wrong pick stays chosen in Workday's picker: remove it before the next search.
+        if (workday && now.f.value.trim()) { await loc.focus().catch(() => {}); await clearSearch(loc); await loc.press('Backspace').catch(() => {}); await closeLists(frame) }
+      }
+    }
+    res.skipped.push(`${label} (could not find ${major}${lastOffered.length ? `; the list offered: ${lastOffered.map(o => o.slice(0, 30)).join(', ')}` : ''})`)
+    return
+  }
+  if (f.kind === 'dropdown' && !f.options.length) await readOptions(frame, f)
+  const exact = studyChooser(major, true)(f.options)
+  const i = exact >= 0 ? exact : choose(f.options)
+  if (i < 0) { res.skipped.push(`${label} (no ${major} option; it offered: ${f.options.slice(0, 8).map(o => o.slice(0, 30)).join(', ')})`); return }
+  await applyAnswer(x, f.options[i], workday, res)
+}
+
 const STUDY = /field of study|\bmajor\b|discipline|area of study|program of study|specialization/i
 const NEVER = /robots only|for robots|honeypot|leave (this|it) (field )?(blank|empty)|do not (fill|enter|complete)|password|captcha|social (security|insurance)|\bssn\b|\bsin\b|passport|driver'?s? licen[cs]e number|bank|credit card/i
 
@@ -446,13 +647,17 @@ async function decide(fields: Field[], job: Job, profile: Profile, resume: Resum
     label: f.label.slice(0, 1500), ...(f.label.length < 4 && f.name ? { fieldName: f.name.slice(0, 80) } : {}), ...(f.question ? { question: f.question.slice(0, 1500) } : {}), ...(f.section ? { section: f.section } : {}),
     required: f.required, ...(f.options.length ? { options: f.options.slice(0, 250) } : {}), ...(f.maxLength ? { maxLength: f.maxLength } : {})
   }))
-  const { extra, ...facts } = profile
+  const { extra, workAuthCanada, workAuthUsa, workAuthUk, needsSponsorship, sponsorshipUsa, sponsorshipUk, ...facts } = profile
+  const elig = eligibilityFor(job, profile)
+  const yn = (v: string): string => v || 'not stated'
   const prompt = `You are filling in a job application form for the candidate. The candidate reviews the whole form before submitting it, so fill in everything you reasonably can. Read between the lines: use what a sensible person who knows the candidate well would answer.
 
 Today is ${today}.
 
 <candidate_facts>
 ${JSON.stringify(facts, null, 1)}
+Work eligibility, by country: Canada: authorized ${yn(workAuthCanada)}, needs sponsorship ${yn(needsSponsorship)}. United States: authorized ${yn(workAuthUsa)}, needs sponsorship ${yn(sponsorshipUsa)}. United Kingdom: authorized ${yn(workAuthUk)}, needs sponsorship ${yn(sponsorshipUk)}.
+This job is in ${elig.country}: authorized to work there: ${yn(elig.authorized)}; needs visa sponsorship there: ${yn(elig.sponsorship)}.
 Other facts from the candidate: ${extra || '(none)'}
 </candidate_facts>
 
@@ -472,11 +677,12 @@ ${JSON.stringify(list)}
 How to answer:
 - For dropdown, radio, select and searchable fields with "options", reply with the exact text of one option. For "checkboxes", reply with an array of the option texts to tick. For a single "checkbox", reply true to tick it or false to leave it.
 - For a searchable field without options, reply with the text to search for (e.g. a school name, a skill, a country).
-- Work authorization, sponsorship and citizenship come from candidate_facts. Answer them directly, including export-control or "U.S. person" (ITAR/EAR) questions: a U.S. citizen is a U.S. person.
+- Work authorization, sponsorship and citizenship come from candidate_facts and must be truthful. Questions about work authorization or sponsorship mean the country the job is in, unless the question names another country. If an answer is "not stated", leave that field out rather than guess. Export-control or "U.S. person" (ITAR/EAR) questions: only a U.S. citizen, U.S. permanent resident (green card holder), refugee or asylee is a U.S. person; answer from the candidate's citizenship.
 - Gender, race, ethnicity, veteran, disability, sexual orientation and similar self-identification questions: choose the option that declines to answer ("I don't wish to answer", "Decline to self-identify", "I do not want to answer").
 - Be lenient: tick or say Yes to consent, acknowledgement, privacy, "I certify", terms, text (SMS) message, recruiting-communication and job-alert questions. When unsure whether to agree to something, agree.
 - Preferred method of contact: Email.
 - AI screening, AI interviews or automated/AI evaluation of the application: answer No (opt out) whenever the form offers the choice.
+- Government official, politically exposed person, conflict of interest, "ability to influence decisions", or relatives working for the company or a government: answer No (the candidate is a student with no such ties). These are often long compliance paragraphs; still pick an option.
 - "Have you worked for / been employed by this company before?", "Are you related to an employee?", non-compete or "Have you been convicted" style questions: answer No unless the facts say otherwise.
 - "How did you hear about us?": always the company's careers website. Pick the option closest to that ("Careers Website", "Company Website", "Corporate Website", "Career Site"); for a free-text box write "Company careers website". Only if no such option exists, pick a job board.
 - Field of study, major or discipline: always the major in candidate_facts. With options, pick that exact discipline or the option that names it (never a different engineering discipline such as aerospace); if none names it, leave the field out. Without options, search for the major's exact name.
@@ -491,7 +697,9 @@ How to answer:
 - Dates: match the format the label or inputType implies (MM, YYYY, MM/YYYY, YYYY-MM-DD). A "date" for a signature or self-identification form is today. Start date is the candidate's availability.
 - Fields in sections like "Work Experience 1", "Work Experience 2", "Education 1" map to the resume entries in the order they appear on the resume. "Role Description" or similar: 2 to 4 plain sentences from that entry's bullets.
 - Notice period for a current employer: "2 weeks".
-- Lists of countries in a question matter: answer from the candidate's actual citizenships (United States and Canada) against the exact list shown.
+- "Date obtained" next to a citizenship country (e.g. "Country 1 Name" / "Date Obtained 1"): the date for that country from citizenshipDates in candidate_facts (citizenship by birth = the birth date given there). Never guess it: if citizenshipDates does not give it, leave the field empty.
+- Authorized to work "on an indefinite basis", "permanently", or "without sponsorship (now or in the future)": a candidate who needs sponsorship for that country is NOT authorized indefinitely (student visas such as F-1/OPT, H-1B and similar are temporary), so answer No, even though the plain "authorized to work" fact is Yes.
+- Lists of countries in a question matter: answer from the candidate's actual citizenship in candidate_facts against the exact list shown.
 - Salary or compensation: if the job states a pay range, give its minimum; otherwise reply "Open to discussion" for text fields.
 - Open questions ("Why do you want...", "Tell us about..."): 2 to 5 specific, first-person sentences built from the resume, facts and job. No clichés. Respect maxLength.
 - Never invent experience, employers, credentials, grades or numbers. Reply "" only when the answer truly cannot be known (a government ID number, a date of birth, a password) or when a field should stay blank (address line 2, middle name, an optional link the candidate does not have).
@@ -537,6 +745,36 @@ async function tick(frame: Frame, box: Locator): Promise<void> {
   const label = id ? frame.locator(`label[for="${id}"]`).first() : null
   if (label && (await label.isVisible().catch(() => false))) await label.click({ timeout: 2500 }).catch(() => {})
   if (!(await box.isChecked().catch(() => false))) await box.click({ force: true, timeout: 2500 }).catch(() => {})
+  if (!(await box.isChecked().catch(() => false))) await acceptConsentDialog(frame)
+}
+/**
+ * Closes a cookie banner, which can sit on top of the form's Next and Submit buttons (Oracle's does). Rejects
+ * optional cookies where the banner allows it, and accepts only when that is the sole way to close it.
+ */
+async function dismissCookies(p: Page): Promise<boolean> {
+  // Workday's own cookie bar.
+  const wdDecline = p.locator(wd('legalNoticeDeclineButton')).first()
+  if (await wdDecline.isVisible().catch(() => false)) { await wdDecline.click({ timeout: 2500 }).catch(() => {}); await p.waitForTimeout(400); return true }
+  const scope = ':is([class*="cookie" i], [id*="cookie" i], [id*="onetrust" i], [class*="consent" i], [id*="consent" i], [aria-label*="cookie" i])'
+  const btns = p.locator(`${scope} :is(button, [role="button"], a), ${scope}:is(button, a)`).locator('visible=true')
+  for (const re of [/^\s*(reject|decline|deny)( all| optional| non-essential)?( cookies)?\s*$/i, /^\s*(accept|allow)( all)?( cookies)?\s*$|^\s*(got it|i understand|ok)\s*$/i]) {
+    const b = btns.filter({ hasText: re }).first()
+    if (await b.isVisible().catch(() => false)) { await b.click({ timeout: 2500 }).catch(() => {}); await p.waitForTimeout(500); return true }
+  }
+  return false
+}
+/**
+ * Some consent boxes (Oracle's "I have read the Important Privacy Information") open the notice in a dialog when
+ * ticked, and only become ticked once its Accept button is pressed.
+ */
+async function acceptConsentDialog(frame: Frame): Promise<void> {
+  // A page can hold several dialogs (Oracle keeps four, mostly hidden), so look for a visible Accept inside any of them.
+  const accept = frame.locator(':is([role="dialog"], [aria-modal="true"], dialog[open]) :is(button, [role="button"], input[type="button"], input[type="submit"])')
+    .locator('visible=true').filter({ hasText: /^\s*(accept|i accept|agree|i agree|ok|confirm|i have read)\s*$/i }).first()
+  // The dialog animates in, so give it a moment to appear.
+  if (await accept.waitFor({ state: 'visible', timeout: 3000 }).then(() => true).catch(() => false)) {
+    await accept.click({ timeout: 2500 }).catch(() => {}); await frame.page().waitForTimeout(600)
+  }
 }
 
 async function applyAnswer(x: Located, value: Answer['value'], workday: boolean, res: PrefillResult): Promise<void> {
@@ -554,10 +792,23 @@ async function applyAnswer(x: Located, value: Answer['value'], workday: boolean,
       return
     }
     case 'wddate': {
-      const fmt = f.inputType.replace(/^date /, '').split('/')
+      const sep = f.inputType.match(/[/.-]/)?.[0] || '/'
+      const fmt = f.inputType.replace(/^date /, '').split(/[/.-]/)
       const got = text.split(/[^0-9]+/).filter(Boolean)
-      if (got.length !== fmt.length) { res.skipped.push(`${label} (date "${text}" does not fit ${fmt.join('/')})`); return }
-      const digits = got.map((g, k) => fmt[k] === 'YYYY' ? g.padStart(4, '20') : g.padStart(2, '0')).join('')
+      if (got.length !== fmt.length) { res.skipped.push(`${label} (date "${text}" does not fit ${fmt.join(sep)})`); return }
+      const padded = got.map((g, k) => fmt[k] === 'YYYY' ? g.padStart(4, '20') : g.padStart(2, '0'))
+      if (f.name === 'ui5date') {
+        // SAP UI5 date picker: type the whole date into the box inside the component, then confirm with Enter.
+        const box = loc.first().locator('input').first()
+        await box.click({ timeout: 3000 }).catch(() => box.focus())
+        await box.fill(padded.join(sep)).catch(async () => { await box.press('ControlOrMeta+a'); await frame.page().keyboard.type(padded.join(sep), { delay: 40 }) })
+        await box.press('Enter').catch(() => {})
+        await box.press('Tab').catch(() => {})
+        const now = await loc.first().getAttribute('value').catch(() => '')
+        if (now) res.filled.push(`${label}: ${now}`); else res.skipped.push(`${label} (the date picker did not take "${padded.join(sep)}")`)
+        return
+      }
+      const digits = padded.join('')
       const first = loc.first()
       await first.locator('xpath=preceding-sibling::*[1]').click({ timeout: 2000 }).catch(() => first.focus())
       await first.focus().catch(() => {})
@@ -632,6 +883,10 @@ async function applyAnswer(x: Located, value: Answer['value'], workday: boolean,
   }
 }
 
+// The user's additional documents (Profile › Additional documents), supplied by the app.
+let documents: () => DocFile[] = () => []
+export const useDocuments = (f: () => DocFile[]): void => { documents = f }
+
 async function attachFiles(fields: Located[], tailored: Tailored | null, res: PrefillResult): Promise<void> {
   // Already uploaded (Workday keeps the file from its "Autofill with Resume" step): never upload a second copy.
   const page0 = fields[0]?.frame.page()
@@ -642,6 +897,16 @@ async function attachFiles(fields: Located[], tailored: Tailored | null, res: Pr
   for (const { frame, f } of fields.filter(x => x.f.kind === 'file')) {
     const key = `${f.label} ${f.name}`
     const isCover = /cover/i.test(key)
+    // An upload box for a transcript, portfolio, reference letter... gets the matching additional document.
+    const extra = /resume|\bcv\b|curriculum/i.test(key) ? null : documentFor(`${f.question} ${f.label}`, documents())
+    if (extra && !(isCover && tailored?.coverPdfPath)) {
+      try {
+        await frame.locator(`[data-ih-idx="${f.idx}"]`).first().setInputFiles(extra.path)
+        res.filled.push(`${short(f)}: attached ${extra.name}`)
+        if (isCover) coverDone = true
+      } catch (e) { res.skipped.push(`${short(f)} (upload of ${extra.name} failed: ${(e as Error).message.split('\n')[0].slice(0, 60)})`) }
+      continue
+    }
     if (!isCover && !resumeDone && tailored?.pdfPath && (/resume|cv|curriculum|file-upload/i.test(key) || !/transcript|portfolio|other|additional/i.test(key))) {
       try {
         await frame.locator(`[data-ih-idx="${f.idx}"]`).first().setInputFiles(tailored.pdfPath)
@@ -654,6 +919,19 @@ async function attachFiles(fields: Located[], tailored: Tailored | null, res: Pr
       } catch (e) { res.skipped.push(`Cover letter upload (${(e as Error).message.split('\n')[0].slice(0, 60)})`) }
     } else if (f.required) res.skipped.push(`${short(f)} (file upload)`)
   }
+}
+
+/** SuccessFactors: open an entry under "Formal Education" when the form has none, so school, degree and major get filled. */
+async function addSuccessFactorsEducation(p: Page, fields: Located[], res: PrefillResult): Promise<boolean> {
+  const heading = p.locator('h1, h2, h3, h4, [role="heading"], button, span, div').filter({ hasText: /^\s*Formal Education\s*$/i }).locator('visible=true').first()
+  if (!(await heading.isVisible().catch(() => false))) return false
+  if (fields.some(x => /^\s*(school|institution|university|college)( name)?\s*$/i.test(x.f.label))) return false
+  const add = p.locator('xpath=//*[normalize-space(.)="Formal Education"]/following::*[self::button or @role="button" or self::a][contains(normalize-space(.), "Add")][1]').first()
+  if (!(await add.isVisible().catch(() => false))) return false
+  await add.click().catch(() => {})
+  await p.waitForTimeout(2000)
+  res.filled.push('Added a Formal Education entry')
+  return true
 }
 
 /** Workday "My Experience": add empty Work Experience / Education blocks when the page has none. */
@@ -711,12 +989,14 @@ async function fillCurrentPage(p: Page, job: Job, profile: Profile, resume: Resu
 async function fillPage(p: Page, job: Job, profile: Profile, resume: Resume, tailored: Tailored | null, model: string, label: string, redo: boolean): Promise<PrefillResult> {
   const res = blank(label)
   const workday = isWorkdayUrl(p.url())
+  await dismissCookies(p)
   const attempted = new Set<string>()
   // Some forms (SuccessFactors) open with every section folded shut, which hides all the fields.
   const expand = p.locator('button:visible, a:visible, [role="button"]:visible').filter({ hasText: /^\s*expand all( sections)?\s*$/i }).first()
   if (await expand.isVisible().catch(() => false)) { await expand.click().catch(() => {}); await p.waitForTimeout(2500); res.filled.push('Opened all sections') }
   let fields = await collectAll(p)
   if (workday && /experience/i.test(label) && (await addWorkdayBlocks(p, fields, resume, res))) fields = await collectAll(p)
+  if (!workday && (await addSuccessFactorsEducation(p, fields, res))) fields = await collectAll(p)
   // Workday's own resume reader sometimes fills the field of study with a different discipline. Where the chosen
   // value does not match the major in the profile, it is removed so the right one is picked below.
   if (workday && profile.major.trim()) {
@@ -724,8 +1004,7 @@ async function fillPage(p: Page, job: Job, profile: Profile, resume: Resume, tai
     let cleared = false
     for (const x of fields) {
       if (x.f.kind !== 'combobox' || !STUDY.test(`${x.f.label} ${x.f.question}`) || !x.f.value.trim()) continue
-      const v = ` ${norm(x.f.value)} `
-      if (!key.length || key.every(k => v.includes(` ${k} `))) continue
+      if (!key.length || sameDiscipline(x.f.value, profile.major)) continue
       const loc = x.frame.locator(`[data-ih-idx="${x.f.idx}"]`).first()
       await loc.focus().catch(() => {})
       await clearSearch(loc)
@@ -736,11 +1015,41 @@ async function fillPage(p: Page, job: Job, profile: Profile, resume: Resume, tai
     }
     if (cleared) { await p.waitForTimeout(600); fields = await collectAll(p) }
   }
+  // Contact details come from the profile, never from the site's resume reader (Workday's autofill has typed
+  // "baseline" as the city and "PID" as the postal code). A text box holding something else gets the profile value.
+  {
+    const OWN: [RegExp, string][] = [[/postal|zip/i, profile.postalCode], [/\bcity\b|\btown\b/i, profile.city],
+      [/address( line)? ?1?$|street/i, profile.address]]
+    let fixed = false
+    for (const x of fields) {
+      if (x.f.kind !== 'text' || !x.f.value.trim()) continue
+      const name = `${x.f.label} ${x.f.question}`.trim()
+      const want = OWN.find(([re]) => re.test(x.f.label || name))?.[1]?.trim()
+      if (!want || x.f.value.trim().toLowerCase() === want.toLowerCase()) continue
+      try {
+        await applyAnswer(x, want, workday, res)
+        res.filled.push(`${short(x.f)}: replaced "${x.f.value.slice(0, 30)}" (from your profile)`); fixed = true
+      } catch { /* left as it was */ }
+    }
+    if (fixed) { await p.waitForTimeout(400); fields = await collectAll(p) }
+  }
   await attachFiles(fields, tailored, res)
   if (tailored?.pdfPath && fields.some(x => x.f.kind === 'file')) { await p.waitForTimeout(1500); fields = await collectAll(p) }   // uploads can autofill and re-render
 
-  // Two passes: answering a question can reveal follow-up questions.
-  for (let pass = 0; pass < 2; pass++) {
+  // Up to five passes (it stops as soon as nothing new is empty): answers reveal follow-ups, which reveal more (Analog Devices).
+  for (let pass = 0; pass < 5; pass++) {
+    // Field of study is filled by rule from the profile, before Claude sees the rest of the page.
+    if (profile.major.trim()) {
+      let touched = false
+      for (const x of fields.filter(y => isStudy(y.f) && !attempted.has(y.key))) {
+        attempted.add(x.key)
+        if (sameDiscipline(x.f.value, profile.major)) continue
+        checkStop()
+        try { await fillStudy(p, x, profile.major, workday, res); touched = true }
+        catch (e) { res.skipped.push(`${short(x.f)} (could not fill: ${(e as Error).message.split('\n')[0].slice(0, 60)})`) }
+      }
+      if (touched) { await p.waitForTimeout(400); fields = await collectAll(p); for (const y of fields) if (isStudy(y.f)) attempted.add(y.key) }
+    }
     const words = /[a-z]{3,}\s+[a-z]{2,}/i
     const meaningless = (f: Field): boolean => (f.kind === 'checkbox' && !f.question && !words.test(f.label)) ||
       (f.kind === 'checkboxes' && !words.test(f.label) && !f.options.some(o => words.test(o)))
@@ -750,7 +1059,7 @@ async function fillPage(p: Page, job: Job, profile: Profile, resume: Resume, tai
     let answers: Map<number, Answer['value']>
     try { answers = await decide(todo.map(x => x.f), job, profile, resume, tailored, model) }
     catch (e) {
-      res.skipped.push(`Claude could not decide the answers (${(e as Error).message.slice(0, 80)}); filled the basics only`)
+      res.skipped.push(`${aiName()} could not decide the answers (${(e as Error).message.slice(0, 80)}); filled the basics only`)
       answers = new Map(todo.map(x => [x.f.idx, ruleAnswer(x.f, profile, job)]))
     }
     for (const x of todo) {
@@ -803,6 +1112,8 @@ const wd = (id: string): string => `[data-automation-id="${id}"]`
 const triedCreate = new Set<string>()
 /** Employers where Workday rejected the saved login. The app stops trying there: repeated failures can lock the account. */
 const loginRejected = new Set<string>()
+/** After the account is verified from email, the saved login may be tried again on that employer's Workday. */
+const forgetRejected = (tenant: string): void => { loginRejected.delete(tenant) }
 let watchToken = 0
 
 const seen = (p: Page, sel: string, timeout = 0): Promise<boolean> => {
@@ -916,6 +1227,19 @@ async function authStep(p: Page, tenant: string, hooks: WorkdayHooks): Promise<P
   return res
 }
 
+/** Presses "Sign in with email" (or "Create account with email") on Workday's social sign-in menu. True when pressed. */
+async function openEmailSignIn(p: Page): Promise<boolean> {
+  if (await pwVisible(p)) return false
+  const btn = p.locator(`${wd('SignInWithEmailButton')}, ${wd('CreateAccountWithEmailButton')}`).or(
+    p.locator('button:visible, [role="button"]:visible').filter({ hasText: /^\s*(sign in|create (an )?account|continue) with email\s*$/i })).or(
+    p.getByText(/^\s*(sign in|create (an )?account|continue) with email\s*$/i)).first()
+  if (!(await btn.isVisible().catch(() => false))) return false
+  await btn.click().catch(() => {})
+  await p.locator('input[type="password"]:visible').first().waitFor({ timeout: 8000 }).catch(() => {})
+  await p.waitForTimeout(500)   // the form re-renders after switching; typing too early is lost
+  return true
+}
+
 async function workdayStep(p: Page, args: Args, hooks: WorkdayHooks): Promise<PrefillResult> {
   const [job, profile, resume, tailored, model] = args
   const tenant = hostOf(p.url()).split('.')[0]
@@ -928,14 +1252,27 @@ async function workdayStep(p: Page, args: Args, hooks: WorkdayHooks): Promise<Pr
   // The "Create Account/Sign In" step can show its progress bar before its password boxes: wait for them,
   // and never treat that step as an application page (doing so marked employers as "has an account").
   const stepNow = await p.locator(wd('progressBarActiveStep')).first().innerText({ timeout: 400 }).catch(() => '')
-  const authPage = /sign in|create account/i.test(stepNow) || (await seen(p, `${wd('signInContent')}, ${wd('signInFormo')}`))
-  if (authPage) await p.locator('input[type="password"]:visible').first().waitFor({ timeout: 10_000 }).catch(() => {})
+  // Some employers' progress bars have no step names (Hitachi): then the page's own "Sign In" heading tells.
+  const authPage = /sign in|create account/i.test(stepNow) || (await seen(p, `${wd('signInContent')}, ${wd('signInFormo')}`)) ||
+    (await p.locator('h1:visible, h2:visible, h3:visible').filter({ hasText: /^\s*(sign in|create account)\s*$/i }).count().catch(() => 0)) > 0
+  // Some employers open sign-in on a menu (Sign in with Apple / Google / LinkedIn, or "Sign in with email"): the
+  // email and password boxes appear only after choosing email.
+  // The menu loads after the progress bar, so wait for either it or the password boxes before deciding.
+  if (authPage) await p.locator(`input[type="password"]:visible, ${wd('SignInWithEmailButton')}, ${wd('CreateAccountWithEmailButton')}`)
+    .or(p.getByText(/^\s*(sign in|create (an )?account) with email\s*$/i)).first().waitFor({ timeout: 10_000 }).catch(() => {})
+  if (await openEmailSignIn(p)) return blank('Workday sign-in', 'Chose "Sign in with email". The app signs in on the next look.')
   if ((await p.locator('input[type="password"]:visible').count().catch(() => 0)) > 0) return authStep(p, tenant, hooks)
   if (authPage) return blank('Workday sign-in', 'The sign-in page is still loading. The app tries again when it appears; if it does not, press "Fill this page again".')
   if ((await seen(p, wd('applyManually'))) || (await seen(p, wd('autofillWithResume')))) {
     const res = blank('Workday: how to apply'); await chooseStart(p, tailored, res); return res
   }
   const inFlow = /\/apply(\/|$)/.test(p.url()) || (await seen(p, wd('progressBar')))
+  // "Continue Application" replaces Apply when an application was started earlier.
+  const resumeBtn = p.locator('a:visible, button:visible').filter({ hasText: /^\s*continue application\s*$/i }).first()
+  if (!inFlow && !(await seen(p, wd('adventureButton'))) && (await resumeBtn.isVisible().catch(() => false))) {
+    await resumeBtn.click().catch(() => {})
+    return blank('Workday job page', 'Continuing the application started earlier. The next pages are filled as they appear.')
+  }
   if (!inFlow && (await seen(p, wd('adventureButton')))) {
     const res = blank('Workday job page')
     await p.locator(wd('adventureButton')).first().click()
@@ -949,7 +1286,18 @@ async function workdayStep(p: Page, args: Args, hooks: WorkdayHooks): Promise<Pr
   const res = await fillCurrentPage(p, job, profile, resume, tailored, model, step ? `Workday: ${step.replace(/\s+/g, ' ').replace(/^current step \d+ of \d+/i, '').trim()}` : 'Workday page')
   if (inFlow) {
     res.note = 'Check this page, finish what is left for you, then press Save and Continue. The next page is filled when it appears. Submit is always yours.'
-    if (hooks.autoContinue !== false) await pressContinue(p, res)
+    if (hooks.autoContinue !== false) {
+      await pressContinue(p, res)
+      // Workday sometimes drops a value it showed (an autofilled "How did you hear about us?") and refuses the page.
+      // Once: fill what is empty now, then try again.
+      // Also after Workday's own "Page Error" with only an error code, which a second press usually clears.
+      if (/did not accept the page|did not move on/.test(res.note)) {
+        const again = await fillCurrentPage(p, job, profile, resume, tailored, model, res.page)
+        res.filled.push(...again.filled.map(f => `${f} (after Workday's error)`))
+        res.skipped = again.skipped
+        await pressContinue(p, res)
+      }
+    }
   }
   return res
 }
@@ -976,7 +1324,7 @@ async function pressContinue(p: Page, res: PrefillResult): Promise<void> {
   await btn.scrollIntoViewIfNeeded().catch(() => {})
   const overlay = btn.locator('xpath=..').locator(wd('click_filter')).first()
   if (await overlay.isVisible().catch(() => false)) await overlay.click(); else await btn.click()
-  for (let i = 0; i < 24; i++) {
+  for (let i = 0; i < 40; i++) {
     await p.waitForTimeout(500)
     if ((await signature(p)) !== before) { res.filled.push('Pressed Save and Continue'); res.note = 'Pressed Save and Continue. The next page is filled when it appears. Submit is always yours.'; return }
   }
@@ -1225,7 +1573,6 @@ export async function prefill(profileDir: string, args: Args, hooks: WorkdayHook
   const [job] = args
   watchToken++   // stop any watcher from an earlier run
   const p = await getPage(profileDir)
-  await p.bringToFront().catch(() => {})
   await p.goto(job.applyUrl || job.url, { waitUntil: 'domcontentloaded', timeout: 45_000 })
   await p.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {})
   if (!isWorkdayUrl(p.url()) && (await waitForSuccessFactorsJobPage(p))) {
@@ -1259,4 +1606,16 @@ export async function fillAgain(args: Args, hooks: WorkdayHooks): Promise<Prefil
 }
 
 /** For tests: fill whatever page is open, without the Workday walk. */
-export const _test = { successFactorsApply, siteSignIn, pages: (): string[] => (context?.pages() || []).map(x => x.url()), stopWatching, pressContinue, prefill, closeBrowser,  collectAll, fillCurrentPage, bestOption, workdayStep, pickInCombobox, visibleOptions }
+export const _test = { sameDiscipline, fillStudy, addSuccessFactorsEducation, studyChooser, studyTerms, successFactorsApply, siteSignIn, pages: (): string[] => (context?.pages() || []).map(x => x.url()), stopWatching, pressContinue, prefill, closeBrowser,  collectAll, fillCurrentPage, bestOption, workdayStep, pickInCombobox, visibleOptions }
+
+/** A fresh tab in the application browser, for auto-apply. */
+async function newTab(profileDir: string, hidden = false): Promise<Page> {
+  const first = await getPage(profileDir, hidden)
+  return first.context().newPage()
+}
+/** Every open tab in the application browser. */
+const openPages = (): Page[] => (context?.pages() || []).filter(x => !x.isClosed())
+
+/** The pieces auto-apply drives directly. */
+export const forAutoApply = { dismissCookies, forgetRejected, minimize, newTab, openPages, workdayStep, successFactorsApply, waitForSuccessFactorsJobPage, siteSignIn, fillCurrentPage, guardSubmit,
+  pwVisible, wdError, signature, isWorkdayUrl, collectAll, wd: (id: string): string => wd(id), stopWatching }

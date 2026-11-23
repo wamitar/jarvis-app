@@ -11,5 +11,7 @@ const sub = (channel: string) => (fn: (v: unknown) => void) => {
 api.onProgress = sub('progress')
 api.onUsage = sub('usage')
 api.onActivity = sub('activity')
+api.onAutoApply = sub('autoApply')
+api.onLiveRun = sub('liveRun')
 api.onPrefillUpdate = sub('prefillUpdate')
 contextBridge.exposeInMainWorld('api', api)

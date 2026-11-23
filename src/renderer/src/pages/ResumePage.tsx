@@ -1,3 +1,4 @@
+import { ai } from '../ai'
 import { useEffect, useState } from 'react'
 import type { AppState } from '../../../shared/api'
 import type { Resume } from '../../../shared/types'
@@ -15,7 +16,7 @@ export function ResumePage({ state, reload, notify, go }: { state: AppState; rel
     setBusy(true)
     try {
       const r = await window.api.importResume()
-      if (r) { setResume(r); setVersion(v => v + 1); setDirty(false); await reload(); notify('Resume read. Check it below and fix anything Claude got wrong.') }
+      if (r) { setResume(r); setVersion(v => v + 1); setDirty(false); await reload(); notify(`Resume read. Check it below and fix anything ${ai()} got wrong.`) }
     } catch (e) { notify(errText(e), true) } finally { setBusy(false) }
   }
   const choosePdf = async (): Promise<void> => {
@@ -27,15 +28,15 @@ export function ResumePage({ state, reload, notify, go }: { state: AppState; rel
   return (
     <div className="page narrow">
       <div className="head">
-        <div><h1>Your resume</h1><p>This is the source for every tailored version. Claude may reword and reorder it, but never add to it. Wrap words in **two asterisks** to make them bold in the PDF.</p></div>
+        <div><h1>Your resume</h1><p>This is the source for every tailored version. {ai()} may reword and reorder it, but never add to it. Wrap words in **two asterisks** to make them bold in the PDF.</p></div>
         <div className="rowx">
           <button className="btn" onClick={importPdf} disabled={busy}>{busy && <span className="spin" />}{busy ? 'Reading PDF…' : state.hasResume ? 'Replace from PDF' : 'Import PDF'}</button>
           {state.hasResume && <button className="btn primary" onClick={save} disabled={!dirty}>Save changes</button>}
         </div>
       </div>
-      {!state.cliFound && <div className="banner bad">Claude Code was not found on this Mac. Install it and sign in with your Claude account, then reopen this app.</div>}
+      {!state.cliFound && <div className="banner bad">{state.settings.aiProvider === 'codex' ? 'Codex was not found on this Mac. Install it and sign in (codex login), or switch to Claude in Settings.' : 'Claude Code was not found on this Mac. Install it and sign in with your Claude account, then reopen this app.'}</div>}
       {!state.hasResume ? (
-        <div className="empty"><h2>Start with your resume</h2><p>Import your PDF. Claude reads it once and turns it into editable sections.<br />Reading takes about a minute.</p></div>
+        <div className="empty"><h2>Start with your resume</h2><p>Import your PDF. {ai()} reads it once and turns it into editable sections.<br />Reading takes about a minute.</p></div>
       ) : (<>
         <div className="banner info"><span>Next: fill in your <a onClick={() => go('profile')}>Profile</a> so application forms can be pre-filled, then find jobs.</span>
           <button className="btn sm" onClick={() => go('jobs')}>Go to Jobs</button></div>
