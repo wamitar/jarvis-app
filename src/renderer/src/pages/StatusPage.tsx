@@ -3,6 +3,7 @@ import type { AppState } from '../../../shared/api'
 import type { Activity, AutoApplyResult, Job, LiveJob, LiveRun } from '../../../shared/types'
 import { ai } from '../ai'
 import { AnswerQuestions } from '../components/AnswerQuestions'
+import { GuessNotes } from '../components/GuessNotes'
 
 const STATE: Record<LiveJob['state'], [string, string]> = {
   waiting: ['Waiting', ''], tailoring: ['Tailoring resume', 'accent'], working: ['Filling the application', 'accent'],
@@ -102,6 +103,7 @@ export function StatusPage({ state, jobs, activity, reload, openJob }: { state: 
             <div style={{ minWidth: 0 }}>
               <div className="ellipsis"><b>{j.company}</b> · <a onClick={() => openJob(j.id)}>{j.title}</a></div>
               <div className="muted small">{r.reason}{r.page && r.page !== 'Starting' ? ` (on ${r.page})` : ''} · {when(r.at)}</div>
+              <GuessNotes notes={r.notes} />
               {r.questions && r.questions.length > 0 && <AnswerQuestions key={r.questions.join('|')} jobId={r.jobId} questions={r.questions} onSaved={async () => { setAuto(a => { const n = { ...a }; delete n[r.jobId]; return n }); await reload() }} />}
             </div>
             <span className="rowx">
@@ -119,6 +121,7 @@ export function StatusPage({ state, jobs, activity, reload, openJob }: { state: 
             <div style={{ minWidth: 0 }}>
               <div className="ellipsis"><b>{j.company}</b> · <a onClick={() => openJob(j.id)}>{j.title}</a></div>
               <div className="muted small">{auto[j.id]?.outcome === 'applied' ? 'Submitted by the app, confirmation seen' : 'Marked applied by you'}{j.location ? ` · ${j.location}` : ''}</div>
+              <GuessNotes notes={auto[j.id]?.notes} />
             </div>
             <span className="muted small num">{when(j.appliedAt || auto[j.id]?.at)}</span>
           </div>

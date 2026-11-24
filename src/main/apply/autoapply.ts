@@ -26,10 +26,10 @@ export interface AutoApplyDeps {
 }
 
 /** Per-job limit. IH_AUTOAPPLY_LIMIT_MS shortens it for tests. */
-const LIMIT_MS = Number(process.env.IH_AUTOAPPLY_LIMIT_MS) || 15 * 60_000
+const LIMIT_MS = Number(process.env.IH_AUTOAPPLY_LIMIT_MS) || 330_000
 /** With IH_AUTOAPPLY_DRYRUN set, everything runs except the final Submit click (for testing on real sites). */
 const DRY = !!process.env.IH_AUTOAPPLY_DRYRUN
-const limitText = (): string => (LIMIT_MS >= 60_000 ? `${Math.round(LIMIT_MS / 60_000)} minutes` : `${Math.round(LIMIT_MS / 1000)} seconds`)
+const limitText = (): string => { const s = Math.round(LIMIT_MS / 1000); return s >= 60 ? `${Math.floor(s / 60)} min${s % 60 ? ` ${s % 60} s` : ''}` : `${s} seconds` }
 
 // Only ever checked after the app pressed Submit: job pages often say "thank you for your interest".
 const CONFIRMED = /thank you for (applying|your application|submitting)|thanks for applying|application (has been |was )?(successfully )?(submitted|received|sent|complete)|successfully (submitted|applied)|we('ve| have) received your application|you('ve| have) (successfully )?applied|your application is (complete|on its way)/i
@@ -178,10 +178,10 @@ async function securityCodeError(p: Page): Promise<string> {
   return ''
 }
 /** Reads the emailed security code (sent after `since`, never one already typed) from Gmail and types it, one box per character. */
-async function enterSecurityCode(p: Page, boxes: Locator, since: number): Promise<string> {
+async function enterSecurityCode(p: Page, boxes: Locator, since: number, deadline: number): Promise<string> {
   if (!mailHooks.connected()) return ''
   let code = ''
-  for (const end = Date.now() + Math.min(120_000, LIMIT_MS / 4); ;) {
+  for (const end = Date.now() + Math.min(120_000, Math.max(0, deadline - Date.now())); ;) {
     const v = await mailHooks.find({ since, hint: 'greenhouse', waitMs: 0 }).catch(() => null)
     if (v?.code && !usedCodes.has(v.code)) { code = v.code; break }
     if (Date.now() >= end) return ''
@@ -231,7 +231,7 @@ async function pressByTextIn(p: Frame, re: RegExp, links = false): Promise<boole
 }
 
 /** Presses the final Submit (or Apply) button and waits for the site to confirm. Throws Flag when it does not. */
-async function submitFinal(p: Page, workday: boolean): Promise<void> {
+async function submitFinal(p: Page, workday: boolean, deadline: number): Promise<void> {
   await A.guardSubmit(p, false)
   const before = p.url()
   const wdBtn = p.locator(`${A.wd('pageFooterNextButton')}, ${A.wd('bottom-navigation-next-button')}`).locator('visible=true').first()
@@ -289,7 +289,7 @@ async function submitFinal(p: Page, workday: boolean): Promise<void> {
     const boxes = /code/i.test(text) ? await securityCodeBoxes(p) : null
     if (!boxes) continue
     if (coded) { const bad = await securityCodeError(p); if (bad) throw new Flag(`the site did not accept the emailed security code: "${bad}"`); continue }
-    coded = await enterSecurityCode(p, boxes, pressedAt)
+    coded = await enterSecurityCode(p, boxes, pressedAt, deadline)
     if (!coded) throw new Flag(mailHooks.connected() ? 'Greenhouse emailed a security code that didn\'t arrive in Gmail (it asks for one when its robot check is unsure)' : 'the site emailed a security code to type in: connect Gmail in Settings so the app can read it')
     await p.waitForTimeout(500)
     if (!(await pressByText(p, SUBMIT_TEXT))) throw new Flag('typed the emailed security code, but the Submit button stayed disabled')
@@ -301,7 +301,7 @@ async function submitFinal(p: Page, workday: boolean): Promise<void> {
 }
 
 /** Drives one job's application to a confirmed submission. Resolves on success, throws Flag otherwise. */
-async function drive(start: Page, args: Args, hooks: WorkdayHooks, deadline: number, setPage: (s: string) => void, say: (s: string) => void = () => {}): Promise<void> {
+async function drive(start: Page, args: Args, hooks: WorkdayHooks, deadline: number, setPage: (s: string) => void, say: (s: string) => void = () => {}, keep: (r: PrefillResult) => void = () => {}): Promise<void> {
   const [job] = args
   if (job.source === 'linkedin' && /linkedin\.com/i.test(applyLink(job)) && /closed/i.test(missReason(job.id))) throw new Flag('the posting has closed (on the employer\'s own site)')
   if (job.source === 'linkedin' && /linkedin\.com/i.test(applyLink(job))) throw new Flag(`from a LinkedIn alert, and not found on ${job.company}'s own careers site${missReason(job.id) ? ` (${missReason(job.id)})` : ''}: apply on LinkedIn (the app never uses LinkedIn itself)`)
@@ -324,7 +324,8 @@ async function drive(start: Page, args: Args, hooks: WorkdayHooks, deadline: num
   let lastSig = '', same = 0, filledHere = '', mailTries = 0, glitches = 0, emailSteps = 0, sfReset = false
   const started = Date.now()
   const opened = new Set(A.openPages())
-  const current = (): Page => { const mine = A.openPages().filter(x => x === start || !opened.has(x)); return mine[mine.length - 1] || start }
+  // Past the deadline the run has already been flagged and its tabs closed: stop here rather than touch the next job's tab.
+  const current = (): Page => { if (Date.now() >= deadline) throw new Flag(`took longer than ${limitText()}`); const mine = A.openPages().filter(x => x === start || !opened.has(x)); return mine[mine.length - 1] || start }
   while (Date.now() < deadline) {
     checkStop()
     const p = current()
@@ -377,7 +378,7 @@ async function drive(start: Page, args: Args, hooks: WorkdayHooks, deadline: num
     if (workday) {
       const step = (await p.locator(A.wd('progressBarActiveStep')).first().innerText({ timeout: 400 }).catch(() => '')).replace(/\s+/g, ' ')
       setPage(step ? `Workday: ${step.replace(/^current step \d+ of \d+/i, '').trim()}` : 'Workday')
-      if (/review/i.test(step)) { await submitFinal(p, true); return }
+      if (/review/i.test(step)) { await submitFinal(p, true, deadline); return }
       if (filledHere === sig) { await p.waitForTimeout(2500); continue }
       // An application page first shows an empty placeholder: wait for its form and buttons before filling.
       // (Not on the sign-in step: its social menu, "Sign in with email", has no form buttons at all.)
@@ -399,7 +400,7 @@ async function drive(start: Page, args: Args, hooks: WorkdayHooks, deadline: num
       }
       if (process.env.IH_AUTOAPPLY_DEBUG) console.log(`[auto-apply] ${step || 'Workday'} | ${r.page} | filled ${r.filled.join(', ').slice(0, 600)} | ${r.note.slice(0, 160)}${r.skipped.length ? ` | skipped ${r.skipped.join('; ').slice(0, 800)}` : ''}`)
       filledHere = sig
-      say(stepText(r))
+      say(stepText(r)); keep(r)
       const why = problems(r) || blockingNote(r.note)
       const tenant = new URL(p.url()).hostname.split('.')[0]
       // Workday sends a link to confirm a new account (or refuses sign-in until it is confirmed): open it from Gmail.
@@ -407,7 +408,7 @@ async function drive(start: Page, args: Args, hooks: WorkdayHooks, deadline: num
       if (why === 'email verification needed' && mailTries < 2) {
         mailTries++
         setPage('Email verification (checking Gmail)')
-        if (await verifyByEmail(p, started - 10 * 60_000, tenant, mailTries === 1 ? Date.now() - 14 * 24 * 3600_000 : 0)) { A.forgetRejected(tenant); filledHere = ''; same = 0; continue }
+        if (await verifyByEmail(p, started - 10 * 60_000, tenant, mailTries === 1 ? Date.now() - 14 * 24 * 3600_000 : 0, Math.max(0, Math.min(90_000, deadline - Date.now())))) { A.forgetRejected(tenant); filledHere = ''; same = 0; continue }
       }
       if (why === 'sign-in not accepted') throw new Flag(`sign-in refused: ${(r.note.match(/Workday says: "(.*?)"\. /)?.[1] || r.note).slice(0, 220)}`)
       if (why) throw new Flag(why, problems(r) ? r.missing || [] : [])
@@ -423,7 +424,7 @@ async function drive(start: Page, args: Args, hooks: WorkdayHooks, deadline: num
         continue
       }
       // A missing button usually means the page was still loading: try this page again (the stuck check ends it if not).
-      if (/could not find the save and continue|still loading|signs in on the next look/i.test(r.note)) { filledHere = ''; await p.waitForTimeout(2000); continue }
+      if (/could not find the save and continue|still loading|on the next look/i.test(r.note)) { filledHere = ''; await p.waitForTimeout(2000); continue }
       if (/button here says|did not accept the page/i.test(r.note)) throw new Flag(r.note.replace(/\. .*$/, ''))
       await p.waitForTimeout(1500)
       continue
@@ -477,12 +478,12 @@ async function drive(start: Page, args: Args, hooks: WorkdayHooks, deadline: num
       setPage(setPageName(p, text))
       const r = await A.fillCurrentPage(p, ...args)
       filledHere = sig
-      say(stepText(r))
+      say(stepText(r)); keep(r)
       flagProblems(r)
     }
     // Multi-page forms move on with Next; single-page forms end with Submit.
     if (await pressByText(p, NEXT_TEXT).catch(() => false)) { await p.waitForTimeout(3000); continue }
-    await submitFinal(p, false)
+    await submitFinal(p, false, deadline)
     return
   }
   throw new Flag(`took longer than ${limitText()}`)
@@ -532,7 +533,11 @@ export async function runAutoApply(jobIds: string[], deps: AutoApplyDeps): Promi
       let page: Page | null = null
       const before = new Set(A.openPages())
       let where = 'Starting'
-      const result = (outcome: AutoApplyResult['outcome'], reason: string, shot = '', questions: string[] = []): AutoApplyResult => ({ jobId, outcome, reason, page: where, at: new Date().toISOString(), shot, ...(questions.length ? { questions } : {}) })
+      // Per job: a drive() that timed out can still be running, and must not add to the next job's notes.
+      const guesses: NonNullable<AutoApplyResult['notes']> = []
+      let closed = false
+      const keep = (r: PrefillResult): void => { if (!closed) for (const g of r.guesses || []) if (!guesses.some(x => x.q === g.q)) guesses.push(g) }
+      const result = (outcome: AutoApplyResult['outcome'], reason: string, shot = '', questions: string[] = []): AutoApplyResult => ({ jobId, outcome, reason, page: where, at: new Date().toISOString(), shot, ...(questions.length ? { questions } : {}), ...(guesses.length ? { notes: [...guesses] } : {}) })
       const stepEnd = begin(`Auto-apply ${done + 1} of ${jobIds.length}`)
       try {
         deps.onProgress(done, jobIds.length, 'Tailoring the resume')
@@ -545,8 +550,8 @@ export async function runAutoApply(jobIds: string[], deps: AutoApplyDeps): Promi
         const deadline = Date.now() + LIMIT_MS
         A.setFillDeadline(deadline)
         await Promise.race([
-          drive(page, args, deps.hooks(jobId), deadline, s => { where = s; deps.onLive?.(jobId, { page: s }) }, step => deps.onLive?.(jobId, { step })),
-          new Promise((_, reject) => setTimeout(() => reject(new Flag(`took longer than ${limitText()}`)), LIMIT_MS + 15_000))
+          drive(page, args, deps.hooks(jobId), deadline, s => { where = s; deps.onLive?.(jobId, { page: s }) }, step => deps.onLive?.(jobId, { step }), keep),
+          new Promise((_, reject) => setTimeout(() => reject(new Flag(`took longer than ${limitText()}`)), LIMIT_MS))
         ])
         applied++
         deps.onResult(result('applied', 'Submitted and confirmed'))
@@ -559,6 +564,7 @@ export async function runAutoApply(jobIds: string[], deps: AutoApplyDeps): Promi
         const reason = e instanceof Flag ? e.message : `error: ${(e as Error).message.split('\n')[0].slice(0, 140)}`
         deps.onResult(result(/^dry run/.test(reason) ? 'dryrun' : 'flagged', reason, shot, e instanceof Flag ? e.questions : []))
       } finally {
+        closed = true
         A.setFillDeadline(Infinity)   // manual "Pre-fill" afterwards has no deadline
         stepEnd()
         done++

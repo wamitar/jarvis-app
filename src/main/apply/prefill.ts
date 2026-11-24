@@ -802,7 +802,7 @@ function ruleAnswer(f: Field, profile: Profile, job: Job): string {
   return r ? r[1](profile, job) : ''
 }
 
-interface Answer { id: number; value: string | string[] | boolean }
+interface Answer { id: number; value: string | string[] | boolean; guess?: string }
 
 /** What the candidate chose for voluntary self-identification, for the prompt. Blank means decline. */
 function eeoText(p: Profile): string {
@@ -819,7 +819,8 @@ function savedAnswersText(p: Profile): string {
  * Asks the AI for every field's answer. `retry` marks a second look at required fields that are still empty: each
  * id maps to what happened the first time, and the AI is told the form cannot be sent until they are answered.
  */
-async function decide(fields: Field[], job: Job, profile: Profile, resume: Resume, tailored: Tailored | null, model: string, retry?: Map<number, string>): Promise<Map<number, Answer['value']>> {
+async function decide(fields: Field[], job: Job, profile: Profile, resume: Resume, tailored: Tailored | null, model: string, retry?: Map<number, string>, whys?: Map<number, string>): Promise<Map<number, Answer['value']>> {
+  whys?.clear()   // ids are renumbered on every pass
   const today = new Date().toISOString().slice(0, 10)
   const list = fields.map(f => ({
     id: f.idx, type: f.kind === 'combobox' ? (f.multi ? 'searchable multi-select' : 'searchable dropdown') : f.kind === 'dropdown' ? 'dropdown' : f.kind,
@@ -832,9 +833,9 @@ async function decide(fields: Field[], job: Job, profile: Profile, resume: Resum
   const elig = eligibilityFor(job, profile)
   const yn = (v: string): string => v || 'not stated'
   const retryNote = retry ? `
-IMPORTANT: this is a second look. Every field below is REQUIRED and still empty, so the application cannot be sent until each one has an answer. "firstAttempt" says what was tried before and why it did not stick (for example the value was not one of the options). Give each field the most sensible answer a careful person in the candidate's position would give, using the rules below. Pick options by their exact text. Leave a field out only if answering it would mean inventing a fact that matters (a government ID, a date of birth, a password) For a self-identification question, decline (or, with no declining option, choose the option that does not identify the candidate with any group); never pick a specific identity.
+IMPORTANT: this is a second look. Every field below is REQUIRED and still empty, so the application cannot be sent until each one has an answer. "firstAttempt" says what was tried before and why it did not stick (for example the value was not one of the options). Give each field the answer least likely to hurt the application, using the rules below. Pick options by their exact text. Leave a field out only if answering it would mean inventing a fact (a government ID, a date of birth, a password). Self-identification: decline, or pick the option that identifies no group.
 ` : ''
-  const prompt = `You are filling in a job application form for the candidate, unattended: nobody is watching, and a required question you leave blank stops the whole application. Use common sense the way a sensible person who knows the candidate well would: answer what the candidate would obviously answer, work things out from the facts, the resume and the posting, and never stall on a question just because its exact answer is not written down somewhere.
+  const prompt = `You are filling in a job application form for the candidate, unattended: nobody is watching, and a required question you leave blank stops the whole application. Work things out from the facts, resume and posting; never stall because an answer is not written down.
 ${retryNote}
 Today is ${today}.
 
@@ -865,21 +866,21 @@ ${JSON.stringify(list)}
 </fields>
 
 How to answer:
+- Principle: when candidate_facts and saved_answers do not settle a question, pick the answer that does not jeopardize the application (what a strong, eligible candidate would answer, or the closest option); mistakes can be fixed with the recruiter later. Match questions by meaning, not wording. Given facts (citizenship, work authorization, sponsorship, self-identification, education) stay truthful and override this; never invent IDs, DOB or passwords.
 - For dropdown, radio, select and searchable fields with "options", reply with the exact text of one option. For "checkboxes", reply with an array of the option texts to tick. For a single "checkbox", reply true to tick it or false to leave it.
 - For a searchable field without options, reply with the text to search for (e.g. a school name, a skill, a country, a month name).
-- Required fields: always answer them when any sensible answer exists. Optional fields: answer when the answer is clear; leave out optional ones that do not apply.
+- Required fields: always answer them. Optional fields: answer when clear; leave out ones that do not apply.
 - Work authorization, sponsorship and citizenship come from candidate_facts and must be truthful. Questions about work authorization or sponsorship mean the country the job is in, unless the question names another country. Export-control or "U.S. person" (ITAR/EAR) questions: only a U.S. citizen, U.S. permanent resident (green card holder), refugee or asylee is a U.S. person; answer from the candidate's citizenship.
 - Authorized to work "on an indefinite basis", "permanently", or "without sponsorship (now or in the future)": a candidate who needs sponsorship for that country is NOT authorized indefinitely, so answer No, even though the plain "authorized to work" fact is Yes.
 - A Canadian citizen's U.S. work authorization comes through citizenship (TN status under USMCA/NAFTA), which the employer still has to support. So for a U.S. job, when the candidate is a Canadian citizen and a question about visa type, sponsorship or work status offers a TN / USMCA / NAFTA / "Canadian citizen" option, pick that option over a generic "I require sponsorship" or "other visa" one.
 - Permanent residency ("Do you hold permanent resident / green card / legal permanent resident status in ..."): a citizen of a country is not a permanent resident of it; answer from candidate_facts, and No for any country the candidate is not a citizen or permanent resident of.
 - Follow-up and conditional questions ("If yes, ...", "If no, please explain", "If you are not authorized ..., what is your status?", "If other, specify"): read the question they depend on. If the condition does not apply to the candidate, write "N/A" in a text box, or pick the option meaning not applicable / none / No. If it does apply, answer it from the facts.
-- History questions whose answer is not in the facts (held a J-1/J-2 or other U.S. visa before, applied or worked here before, relatives at the company, government official, conflict of interest, non-compete, security clearance, convicted of a crime, terminated from a job): answer what is true for an ordinary second-year university student with this resume: No / None / Not applicable.
+- History questions whose answer is not in the facts (held a J-1/J-2 or other U.S. visa before, applied or worked here before, relatives at the company or in government, government official, conflict of interest, non-compete, security clearance, convicted of a crime, terminated from a job): answer what is true for an ordinary second-year university student with this resume: No / None / Not applicable.
 - Experience questions: use the resume. A research internship, co-op or engineering internship counts as internship / co-op experience; student design teams and projects count as hands-on engineering experience. Years of professional experience: less than 1 (or 0) unless the resume shows more.
 - Every identification question (gender, gender identity, transgender, pronouns, sex, race, ethnicity, Hispanic/Latino, Indigenous/Aboriginal, visible minority, member of a designated or equity-seeking group, veteran or military status, disability, sexual orientation / LGBTQ+, religion, age range, marital status and anything similar): use the candidate's self-identification above, and by default do NOT identify. Choose the option that declines ("I don't wish to answer", "Decline to self-identify", "Prefer not to say", "I do not want to answer"). If there is no declining option and the field is optional, leave it out. If it is required and has no declining option, choose the option that does not identify the candidate with any group (e.g. "No" for "Do you identify as a member of a visible minority?"), never a specific identity. Never guess these from a name or anything else.
 - Be lenient: tick or say Yes to consent, acknowledgement, privacy, "I certify", "I understand", terms and conditions, text (SMS) message, recruiting-communication and job-alert questions. When unsure whether to agree to something, agree.
 - Preferred method of contact: Email.
 - AI screening, AI interviews or automated/AI evaluation of the application: answer No (opt out) whenever the form offers the choice.
-- Government official, politically exposed person, conflict of interest, "ability to influence decisions", or relatives working for the company or a government: answer No. These are often long compliance paragraphs; still pick an option.
 - "How did you hear about us?": always the company's careers website. Pick the option closest to that ("Careers Website", "Company Website", "Corporate Website", "Career Site"); for a free-text box or a "please specify" box write "Company careers website". Only if no such option exists, pick a job board, then "Other".
 - Field of study, major or discipline: always the major in candidate_facts. With options, pick that exact discipline or the option that names it (never a different engineering discipline such as aerospace); if none names it, pick the closest general option (e.g. "Engineering", "Other"). Without options, search for the major's exact name.
 - School: the school in candidate_facts. Degree being pursued: the bachelor's degree option ("Bachelor's", "Bachelor of Engineering", "BEng", "BS").
@@ -887,12 +888,12 @@ How to answer:
 - "Highest level of education completed": the candidate has NOT finished a degree yet; pick high school / secondary (or the closest "some college / currently enrolled" option).
 - Year of study / class standing: work it out from the expected graduation (e.g. graduating in 2029 from a 4-year program means second year in the 2026-27 school year: "Sophomore" or "2nd year").
 - Never answer with a placeholder option such as "No Selection" or "Select one". If no real option fits an optional question, leave that field out; for a required one pick the closest real option.
-- Age questions ("Are you 18 or older?"): Yes, the candidate is a university student.
+- Age ("18 or older?"): Yes.
 - Willing to relocate / travel / work on site / commute / work full-time during the internship / work the stated dates or hours: Yes unless the facts say otherwise.
-- Which location, office or site to apply to, when the posting lists several: the one named in the job's location; otherwise the first listed.
+- Which location or office, when the posting lists several: the job's location, else the first listed.
 - Internship season, term or start date: from the candidate's availability and term length in candidate_facts and the job title (e.g. "Summer 2027" in the title means Summer 2027). Start date is the candidate's availability unless the posting's own dates are later.
 - Phone country code or phone country: the country that matches the candidate's phone number. Phone device type: Mobile.
-- Address fields: use the address in the facts; country is the candidate's country.
+- Address fields: the address in the facts.
 - Links: LinkedIn, GitHub and website come from the facts. A required website / portfolio / "other link" field with no such link in the facts gets the LinkedIn URL. Treat a field as required when its text says so, even without a required mark ("your application will not be considered without ...", "must include", "please provide").
 - Fields with type "wddate" are dates: reply in exactly the format in inputType (e.g. "09/2025" for "date MM/YYYY", "11/14/2026" for "date MM/DD/YYYY", "2025" for "date YYYY"). "From"/"To" in a Work Experience or Education section are that entry's start/end dates from the resume; if the resume only gives a year, use 09 for a fall start, 05 for a summer start, 01 otherwise. For a degree in progress the To date is the expected graduation. For a current role give the expected end date only if one is known, otherwise "", and also tick that entry's "I currently work here" box (same section).
 - Searchable multi-select of skills: reply with an array of up to 8 skills from the resume.
@@ -900,18 +901,18 @@ How to answer:
 - Fields in sections like "Work Experience 1", "Work Experience 2", "Education 1" map to the resume entries in the order they appear on the resume. "Role Description" or similar: 2 to 4 plain sentences from that entry's bullets.
 - Notice period: "2 weeks".
 - "Date obtained" next to a citizenship country (e.g. "Country 1 Name" / "Date Obtained 1"): the date for that country from citizenshipDates in candidate_facts (citizenship by birth = the birth date given there). Never guess it: if citizenshipDates does not give it, leave the field empty.
-- Lists of countries in a question matter: answer from the candidate's actual citizenship in candidate_facts against the exact list shown.
+- Lists of countries in a question: check the candidate's actual citizenship against the exact list shown.
 - Salary, pay or compensation expectations: if the job states a pay range, give its minimum. Otherwise give a realistic figure for an engineering intern in the job's location (about 25 USD an hour in the United States, about 24 CAD an hour in Canada); a field asking for an annual amount gets the hourly figure times 2080 (for example 52000). Give just the number (for example 25 or 52000), with no currency or words: forms often accept digits only. Only a large free-text box (textarea) may add words, e.g. "25 USD per hour, open to discussion".
 - GPA: from the facts, in the scale the field implies (a 4.0-scale field gets "3.85").
 - Open questions ("Why do you want...", "Tell us about...", "Describe a project..."): 2 to 5 specific, first-person sentences built from the resume, facts and job. No clichés. Respect maxLength.
 - Never invent experience, employers, credentials, grades or numbers. Reply "" only when the answer truly cannot be known (a government ID number, a date of birth, a password) or when an optional field should stay blank (address line 2, middle name, an optional link the candidate does not have).
 
-Reply with JSON only: {"answers": [{"id": 0, "value": "..."}]} with one entry per field id.`
+Reply with JSON only: {"answers": [{"id": 0, "value": "...", "guess": "..."}]} with one entry per field id. Add "guess": "<short reason>" only when you used the principle or inferred something not in the facts, resume or saved answers.`
   const reply = await askJson<{ answers?: Answer[] } | Answer[]>(prompt, { model, timeoutMs: 180_000 })
   if (process.env.IH_AUTOAPPLY_DEBUG) console.log(`[decide${retry ? ' retry' : ''}] ${JSON.stringify(list.map(f => ({ id: f.id, type: f.type, label: f.label.slice(0, 60), q: (f as { question?: string }).question?.slice(0, 60), opts: (f as { options?: string[] }).options?.slice(0, 6) })))}\n  => ${JSON.stringify(reply).slice(0, 1500)}`)
   const arr = Array.isArray(reply) ? reply : reply?.answers || []
   const map = new Map<number, Answer['value']>()
-  for (const a of arr) if (a && typeof a.id === 'number') map.set(a.id, a.value)
+  for (const a of arr) if (a && typeof a.id === 'number') { map.set(a.id, a.value); if (whys && typeof a.guess === 'string' && a.guess.trim()) whys.set(a.id, a.guess.trim().slice(0, 200)) }
   return map
 }
 
@@ -1392,6 +1393,7 @@ const ownValue = (own: [RegExp, string][], label: string): string => own.find(([
 
 async function fillPage(p: Page, job: Job, profile: Profile, resume: Resume, tailored: Tailored | null, model: string, label: string, redo: boolean): Promise<PrefillResult> {
   const res = blank(label)
+  const whys = new Map<number, string>()
   const workday = isWorkdayUrl(p.url())
   await dismissCookies(p)
   const attempted = new Set<string>()
@@ -1477,6 +1479,8 @@ async function fillPage(p: Page, job: Job, profile: Profile, resume: Resume, tai
       } else if (now && !isEmpty(now.f)) { res.skipped.splice(before); err = '' }   // it took after all
       res.filled = [...new Set(res.filled)]
     }
+    const guess = whys.get(x0.f.idx)
+    if (guess && !err && res.skipped.length === before) (res.guesses ||= []).push({ q: (x0.f.question || x0.f.label).replace(/\s+/g, ' ').trim().slice(0, 200), a: (Array.isArray(v) ? v.join(', ') : String(v)).slice(0, 200), why: guess })
     if (err) res.skipped.push(`${short(x.f)} (could not fill: ${err})`)
     const problem = err || res.skipped.slice(before).join('; ')
     tried.set(x0.key, problem ? `answered "${shown}", but: ${problem.slice(0, 200)}` : `answered "${shown}"`)
@@ -1514,7 +1518,7 @@ async function fillPage(p: Page, job: Job, profile: Profile, resume: Resume, tai
     if (!todo.length) break
     todo = await withOptions(todo)
     let answers: Map<number, Answer['value']>
-    try { answers = await decide(todo.map(x => x.f), job, profile, resume, tailored, model) }
+    try { answers = await decide(todo.map(x => x.f), job, profile, resume, tailored, model, undefined, whys) }
     catch (e) {
       if (e instanceof StoppedError) throw e
       res.skipped.push(`${aiName()} could not decide the answers (${(e as Error).message.slice(0, 80)}); filled the basics only`)
@@ -1563,7 +1567,7 @@ async function fillPage(p: Page, job: Job, profile: Profile, resume: Resume, tai
     const why = (x: Located): string => x.f.error && !isEmpty(x.f)
       ? `answered "${x.f.value.slice(0, 80)}", and the site rejected it: "${x.f.error}". Give a value in the form the site accepts (e.g. digits only for a number, a plain email address).`
       : [tried.get(x.key) || 'not answered yet', x.f.error ? `the site says: "${x.f.error}"` : ''].filter(Boolean).join('; ')
-    try { answers = await decide(left.map(x => x.f), job, profile, resume, tailored, model, new Map(left.map(x => [x.f.idx, why(x)]))) }
+    try { answers = await decide(left.map(x => x.f), job, profile, resume, tailored, model, new Map(left.map(x => [x.f.idx, why(x)])), whys) }
     catch (e) { if (e instanceof StoppedError) throw e; break }
     for (const x of left) {
       checkStop()
@@ -2125,7 +2129,6 @@ async function siteSignIn(p: Page, hooks: WorkdayHooks, profile?: Profile, site 
     gone = clear >= 3
   }
   if (gone) { siteSignedIn.set(host, Date.now()); res.filled.push('Signed in with your saved login'); res.note = 'Signed in with your saved login. The application is filled as it appears.'; return res }
-  siteRejected.add(host)
   // No account here yet: go to the site's create-account page and sign up with the same login.
   // The wording "create an account" is tried first, looser wording ("register", "sign up") only as a fallback.
   const links = p.locator('a, button').locator('visible=true')
@@ -2153,6 +2156,8 @@ async function siteSignIn(p: Page, hooks: WorkdayHooks, profile?: Profile, site 
       return again
     }
   }
+  // Marked only now: the create-account page above is filled by calling this function again, which would stop at the mark.
+  siteRejected.add(host)
   const err = (await p.locator('[role="alert"], .error, .errorMessage, [class*="error" i]').locator('visible=true').allInnerTexts().catch(() => [] as string[])).map(t => t.replace(/\s+/g, ' ').trim()).filter(Boolean).join(' ').slice(0, 160)
   res.note = `${err ? `The site says: "${err}". ` : 'The site did not accept the saved login. '}If you have no account here yet, create one in the browser with the same email and password. The app will not retry on this site, so the account cannot get locked. It carries on once you are in.`
   return res

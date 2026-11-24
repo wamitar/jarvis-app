@@ -83,6 +83,7 @@ export interface LiveRun { running: boolean; startedAt: string; endedAt?: string
 export interface AutoApplyResult {
   jobId: string; outcome: 'applied' | 'flagged' | 'dryrun'; reason: string; page: string; at: string; shot: string
   questions?: string[]   // required questions the app could not answer, word for word, so the user can answer them once
+  notes?: { q: string; a: string; why: string }[]   // best-guess answers the app gave, for the user to check
 }
 
 /** What the app is doing right now (sidebar status light). */
@@ -109,6 +110,7 @@ export interface PrefillResult {
   drafted: { question: string; answer: string }[]
   note: string
   missing?: string[]    // required questions still empty after filling, word for word
+  guesses?: { q: string; a: string; why: string }[]   // answers the AI had to infer, for the user to check
 }
 
 export interface Settings {

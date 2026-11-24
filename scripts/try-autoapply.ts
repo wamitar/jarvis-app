@@ -1,5 +1,5 @@
 // Runs auto-apply on stand-in pages (made-up https hosts served locally). Every field is pre-filled or one Claude
-// never answers, so no Claude calls are made. Run: IH_AUTOAPPLY_LIMIT_MS=20000 node --no-warnings --import ./scripts/resolve-ts.mjs scripts/try-autoapply.ts
+// never answers, so no Claude calls are made. Run: IH_AUTOAPPLY_LIMIT_MS=40000 node --no-warnings --import ./scripts/resolve-ts.mjs scripts/try-autoapply.ts
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
