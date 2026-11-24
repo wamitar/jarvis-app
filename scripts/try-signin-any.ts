@@ -56,6 +56,14 @@ await page.goto('data:text/html,' + encodeURIComponent(signIn(true)))
 r = await _test.siteSignIn(page, hooks)
 check('no password typed off https', (await page.locator('#pw').inputValue()) === '' && /not on a secure/.test(r.note), r.note)
 
+// Workable: the optional Photo box (image/*) sits before the Resume box; the PDF must go only into Resume.
+await page.goto('data:text/html,' + encodeURIComponent(`<label for="ph">Photo</label><input type="file" id="ph" name="avatar" accept="image/*"><label for="rs">Resume</label><input type="file" id="rs" name="resume">`))
+const up = await _test.collectAll(page)
+const ar = { filled: [] as string[], skipped: [] as string[] }
+await _test.attachFiles(up, { pdfPath: '/tmp/ih-resume.pdf', coverPdfPath: null } as never, ar as never)
+const names = await page.evaluate(() => [...document.querySelectorAll('input[type=file]')].map(i => (i as HTMLInputElement).files?.length || 0))
+check('resume goes in Resume, never the Photo box', names[0] === 0 && names[1] === 1, ar.filled.concat(ar.skipped).join(', '))
+
 await browser.close()
 console.log(bad ? `${bad} FAILED` : 'all passed')
 process.exit(bad ? 1 : 0)

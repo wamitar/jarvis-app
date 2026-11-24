@@ -235,7 +235,7 @@ async function pressByTextIn(p: Frame, re: RegExp, links = false): Promise<boole
 }
 
 /** Presses the final Submit (or Apply) button and waits for the site to confirm. Throws Flag when it does not. */
-async function submitFinal(p: Page, workday: boolean, deadline: number): Promise<void> {
+async function submitFinal(p: Page, workday: boolean, deadline: number, job: Job): Promise<void> {
   await A.guardSubmit(p, false)
   const before = p.url()
   const wdBtn = p.locator(`${A.wd('pageFooterNextButton')}, ${A.wd('bottom-navigation-next-button')}`).locator('visible=true').first()
@@ -284,11 +284,25 @@ async function submitFinal(p: Page, workday: boolean, deadline: number): Promise
   if (!pressed) throw new Flag('no Submit button found')
   const pressedAt = Date.now() - 5000
   let coded = ''
+  // Oracle Recruiting Cloud lands on the candidate profile, whose applications list shows "<requisition> ... Applied on <date>" for this job.
+  const req = job.id.startsWith('oracle:') ? job.id.split(':').pop()!.replace(/\W/g, '') : ''
+  const oracleListed = req ? new RegExp(`\\b${req}\\b[\\s\\S]{0,30}?(applied on|under consideration)`, 'i') : null
+  // Greenhouse sometimes answers a first Submit with this and takes the second: wait, press once more, flag if it repeats.
+  const SITE_ERR = /error processing your application/i
+  let retriedAt = 0
   for (let i = 0; i < 60; i++) {
     await p.waitForTimeout(500)
     if (await robotCheck(p)) throw new Flag('robot check after pressing Submit')
     const text = await bodyText(p)
-    if (CONFIRMED.test(text) || (p.url() !== before && /confirm|thank|success|submitted|complete/i.test(p.url()))) return
+    if (CONFIRMED.test(text) || oracleListed?.test(text) || (p.url() !== before && /confirm|thank|success|submitted|complete/i.test(p.url()))) return
+    if (SITE_ERR.test(text)) {
+      // The first message can still be on screen just after the second press: give the site a few seconds to answer.
+      if (retriedAt) { if (Date.now() - retriedAt > 15_000) throw new Flag('the site said: "There was an error processing your application. Please try again."'); continue }
+      await p.waitForTimeout(4000)
+      if (!(await pressByText(p, SUBMIT_TEXT))) throw new Flag('the site said: "There was an error processing your application. Please try again." and the Submit button was gone')
+      retriedAt = Date.now()
+      continue
+    }
     // Greenhouse: "A verification code was sent to ... enter the 8-character code": read it from Gmail, type it, submit again.
     const boxes = /code/i.test(text) ? await securityCodeBoxes(p) : null
     if (!boxes) continue
@@ -383,7 +397,7 @@ async function drive(start: Page, args: Args, hooks: WorkdayHooks, deadline: num
     if (workday) {
       const step = (await p.locator(A.wd('progressBarActiveStep')).first().innerText({ timeout: 400 }).catch(() => '')).replace(/\s+/g, ' ')
       setPage(step ? `Workday: ${step.replace(/^current step \d+ of \d+/i, '').trim()}` : 'Workday')
-      if (/review/i.test(step)) { await submitFinal(p, true, deadline); return }
+      if (/review/i.test(step)) { await submitFinal(p, true, deadline, job); return }
       if (filledHere === sig) { await p.waitForTimeout(2500); continue }
       // An application page first shows an empty placeholder: wait for its form and buttons before filling.
       // (Not on the sign-in step: its social menu, "Sign in with email", has no form buttons at all.)
@@ -488,7 +502,7 @@ async function drive(start: Page, args: Args, hooks: WorkdayHooks, deadline: num
     }
     // Multi-page forms move on with Next; single-page forms end with Submit.
     if (await pressByText(p, NEXT_TEXT).catch(() => false)) { await p.waitForTimeout(3000); continue }
-    await submitFinal(p, false, deadline)
+    await submitFinal(p, false, deadline, job)
     return
   }
   throw new Flag(`took longer than ${limitText()}`)
@@ -573,7 +587,8 @@ export async function runAutoApply(jobIds: string[], deps: AutoApplyDeps): Promi
         let shot = ''
         const visible = page && !page.isClosed() ? A.openPages().filter(x => x === page || x.url() !== 'about:blank').pop() || page : null
         if (visible) { shot = join(deps.shotDir, `${jobId.replace(/[^a-z0-9]+/gi, '_')}.png`); await visible.screenshot({ path: shot, fullPage: DRY }).catch(() => { shot = '' }); if (process.env.IH_AUTOAPPLY_DEBUG && shot) { const html: string[] = []; for (const f of visible.frames()) html.push(await f.content().catch(() => '')); try { writeFileSync(shot.replace(/\.png$/, '.html'), html.join('\n<!-- frame -->\n')) } catch { /* debug only */ } } }
-        const reason = e instanceof Flag ? e.message : `error: ${(e as Error).message.split('\n')[0].slice(0, 140)}`
+        // Any page call made after the tab was closed (waitForTimeout and the rest) throws this raw Playwright error.
+        const reason = e instanceof Flag ? e.message : /Target page, context or browser has been closed/i.test((e as Error).message) ? 'the application tab closed' : `error: ${(e as Error).message.split('\n')[0].slice(0, 140)}`
         deps.onResult(result(/^dry run/.test(reason) ? 'dryrun' : 'flagged', reason, shot, e instanceof Flag ? e.questions : []))
       } finally {
         skipNow = null

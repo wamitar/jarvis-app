@@ -30,12 +30,19 @@ const pages: Record<string, (u: URL) => string> = {
   // Greenhouse's emailed security code after Submit: 8 one-character boxes, Submit disabled until all are filled.
   'code.test': () => form('', securityStep('/^\\d{8}$/')),
   'badcode.test': () => form('', securityStep('/^never$/')),
+  // Oracle Recruiting Cloud: Submit lands on the candidate profile's applications list (the job's requisition is the last part of its id).
+  'oracle.test': () => form('', "document.body.innerHTML = '<h1>Profile</h1><h2>ACTIVE JOB APPLICATIONS</h2><p>Piping Engineering Student</p><p>Status: Under Consideration</p><p>CNRL Campus Career Site \u2022 2425525 \u2022 Applied on 11/24/2026</p><p>Older Role</p><p>CNRL Campus Career Site \u2022 2425522 \u2022 Applied on 11/14/2026</p>'"),
+  'oracleother.test': () => form('', "document.body.innerHTML = '<h1>Profile</h1><h2>ACTIVE JOB APPLICATIONS</h2><p>Older Role</p><p>Status: Under Consideration</p><p>CNRL Campus Career Site \u2022 2425522 \u2022 Applied on 11/14/2026</p>'"),
+  // Greenhouse: the first Submit answers "There was an error processing your application", the second is accepted (always rejected for the other host).
+  'ghretry.test': () => form('', "window.n = (window.n || 0) + 1; if (window.n < 2) msg.textContent = 'There was an error processing your application. Please try again.'; else document.body.innerHTML = '<h1>Thank you for applying!</h1>'"),
+  'gherror.test': () => form('', "msg.textContent = 'There was an error processing your application. Please try again.'"),
   'endless.test': u => { const n = Number(u.searchParams.get('n') || 1); return `<h1>Step ${n}</h1>${Array.from({ length: n + 1 }, (_, i) => `<label for="f${i}">Field ${i}</label><input id="f${i}" value="x">`).join('')}<button onclick="location.href='https://endless.test/?n=${n + 1}'">Next</button>` }
 }
 const profileDir = mkdtempSync(join(tmpdir(), 'ih-auto-'))
 const first = await forAutoApply.newTab(profileDir, true)
 await first.context().route('**/*', route => { const u = new URL(route.request().url()); const make = pages[u.hostname]; return make ? route.fulfill({ contentType: 'text/html', body: make(u) }) : route.fulfill({ status: 404, body: '' }) })
-const job = (host: string): Job => ({ id: host, source: 'greenhouse', company: host, title: 'Test', location: '', url: `https://${host}/`, applyUrl: `https://${host}/`, description: '', region: 'usa', status: 'new' } as unknown as Job)
+const ids: Record<string, string> = { 'oracle.test': 'oracle:ehaa:2425525', 'oracleother.test': 'oracle:ehaa:2425525' }
+const job = (host: string): Job => ({ id: ids[host] || host, source: ids[host] ? 'oracle' : 'greenhouse', company: host, title: 'Test', location: '', url: `https://${host}/`, applyUrl: `https://${host}/`, description: '', region: 'usa', status: 'new' } as unknown as Job)
 const results: AutoApplyResult[] = []
 const deps = {
   profileDir, shotDir: join(profileDir, 'shots'),
@@ -45,7 +52,7 @@ const deps = {
 }
 const t0 = Date.now()
 const sum = await runAutoApply(Object.keys(pages), deps)
-const expect: Record<string, RegExp> = { 'good.test': /^applied:/, 'robot.test': /robot/, 'required.test': /required field left empty/, 'error.test': /did not accept|no confirmation/, 'noform.test': /no application form/, 'code.test': /^applied:/, 'badcode.test': /did not accept the emailed security code: "The security code is invalid/, 'endless.test': /longer than/ }
+const expect: Record<string, RegExp> = { 'good.test': /^applied:/, 'robot.test': /robot/, 'required.test': /required field left empty/, 'error.test': /did not accept|no confirmation/, 'noform.test': /no application form/, 'code.test': /^applied:/, 'badcode.test': /did not accept the emailed security code: "The security code is invalid/, 'oracle.test': /^applied:/, 'oracleother.test': /no confirmation/, 'ghretry.test': /^applied:/, 'gherror.test': /the site said: "There was an error processing your application\. Please try again\."/, 'endless.test': /longer than/ }
 let bad = 0
 for (const r of results) { const line = `${r.outcome}: ${r.reason}`; const ok = expect[r.jobId].test(line); if (!ok) bad++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${r.jobId.padEnd(14)} ${line}${r.shot ? ' [screenshot]' : ''}`) }
 console.log(`summary ${JSON.stringify(sum)} in ${Math.round((Date.now() - t0) / 1000)}s`)

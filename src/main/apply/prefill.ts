@@ -307,7 +307,9 @@ function collectFields(startIdx: number): Field[] {
         required: l.star || parts.some(x => x.getAttribute('aria-required') === 'true'), value: vals.every(Boolean) ? vals.join('/') : '', options: [], maxLength: 0, multi: false }, [el])
       continue
     }
-    if (!visible(el) || input.readOnly) { skip('invisible/readonly', el); continue }
+    // A read-only box that opens a list (Oracle's select-style dropdowns: an empty box with a caret) is still a dropdown.
+    const pickerOnly = input.readOnly && (el.getAttribute('role') === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox')
+    if (!visible(el) || (input.readOnly && !pickerOnly)) { skip('invisible/readonly', el); continue }
     // Hidden stand-ins some forms keep beside custom dropdowns for their own validation (Greenhouse, react-select).
     if (el.getAttribute('aria-hidden') === 'true' || Number(getComputedStyle(el).opacity) === 0 || (el.tabIndex < 0 && !['combobox', 'spinbutton'].includes(el.getAttribute('role') || ''))) { skip('aria-hidden/opacity/tabindex', el); continue }
     const l = labelFor(el)
@@ -809,6 +811,10 @@ function eeoText(p: Profile): string {
   const rows: [string, string | undefined][] = [['Gender', p.eeoGender], ['Hispanic or Latino', p.eeoHispanic], ['Race', p.eeoRace], ['Veteran status', p.eeoVeteran], ['Disability', p.eeoDisability]]
   return rows.map(([k, v]) => `${k}: ${v?.trim() || 'decline to answer'}`).join('; ')
 }
+const EEO_Q = /\b(gender|sex|race|ethnic\w*|hispanic|latino|veteran|disabilit\w*|sexual orientation|pronouns?)\b/i
+/** A required self-identification list the AI left blank: only an option that declines. Never an identity; none means the user is asked. */
+const eeoFallback = (options: string[]): string =>
+  options.find(o => /(decline|prefer not|do(n'?t| not) wish|choose not|not to (say|answer|disclose|self-identify))/i.test(o)) || ''
 /** The candidate's saved answers, newest first, trimmed to keep the prompt small. */
 function savedAnswersText(p: Profile): string {
   const list = (p.answers || []).filter(x => x.q?.trim() && x.a?.trim()).slice(-80).reverse()
@@ -1144,6 +1150,9 @@ async function attachFiles(fields: Located[], tailored: Tailored | null, res: Pr
   const spare: Located[] = []
   for (const { frame, f, key: k0 } of fields.filter(x => x.f.kind === 'file')) {
     const key = `${f.label} ${f.name}`
+    // A photo / avatar box is never for a document: a PDF in it errors and blocks Submit (Workable's optional "Photo").
+    const hint = await frame.locator(`[data-ih-idx="${f.idx}"]`).first().evaluate((e: Element) => `${e.getAttribute('id') || ''} ${e.getAttribute('aria-label') || ''} ${e.getAttribute('data-testid') || ''} ${/pdf|doc/i.test(e.getAttribute('accept') || '') ? '' : (e.getAttribute('accept') || '').replace(/image\/[^,]*/i, 'photo')}`).catch(() => '')
+    if (/photo|avatar|picture|headshot|profile[\s_-]?(image|pic)/i.test(`${key} ${hint}`)) continue
     const isCover = /cover/i.test(key)
     // An upload box for a transcript, portfolio, reference letter... gets the matching additional document.
     let extra = /resume|\bcv\b|curriculum/i.test(key) ? null : documentFor(`${f.question} ${f.label}`, documents())
@@ -1571,7 +1580,9 @@ async function fillPage(p: Page, job: Job, profile: Profile, resume: Resume, tai
     catch (e) { if (e instanceof StoppedError) throw e; break }
     for (const x of left) {
       checkStop()
-      const v = mustTick(x.f) ? true : answers.get(x.f.idx)
+      let v = mustTick(x.f) ? true : answers.get(x.f.idx)
+      // A declining option the AI missed on a required self-identification list. With none, the field stays empty and is flagged.
+      if ((v === undefined || v === '') && x.f.required && x.f.options.length && EEO_Q.test(`${x.f.question} ${x.f.label}`)) v = eeoFallback(x.f.options)
       if (v === undefined || v === '' || v === false || (Array.isArray(v) && !v.length)) continue
       await apply(x, v)
     }
@@ -1629,8 +1640,11 @@ const triedCreate = new Set<string>()
 const createAfterRefusal = new Set<string>()
 /** Employers where Workday rejected the saved login. The app stops trying there: repeated failures can lock the account. */
 const loginRejected = new Set<string>()
+/** Password submissions per employer in this run (at most two, so a wrong login cannot lock the account). */
+const pwSubmits = new Map<string, number>()
+const REFUSED_AGAIN = 'Workday refused the saved login here earlier in this run, so the app will not try again (repeated tries can lock the account). Sign in yourself in the browser; the app carries on once you are in.'
 /** After the account is verified from email, the saved login may be tried again on that employer's Workday. */
-const forgetRejected = (tenant: string): void => { loginRejected.delete(tenant) }
+const forgetRejected = (tenant: string): void => { loginRejected.delete(tenant); pwSubmits.delete(tenant) }
 let watchToken = 0
 
 const seen = (p: Page, sel: string, timeout = 0): Promise<boolean> => {
@@ -1701,24 +1715,33 @@ async function typeLogin(p: Page, login: { email: string; password: string }): P
  * account cannot get locked, and authStep checks whether an account exists there at all.
  */
 async function signIn(p: Page, login: { email: string; password: string }, res: PrefillResult, tenant = ''): Promise<boolean> {
-  if (tenant && loginRejected.has(tenant)) { res.note = 'Workday refused the saved login here earlier in this run, so the app will not try again (repeated tries can lock the account). Sign in yourself in the browser; the app carries on once you are in.'; return false }
+  if (tenant && loginRejected.has(tenant)) { res.note = REFUSED_AGAIN; return false }
+  let lastErr = ''
+  const stop = (why: string): false => { if (tenant) loginRejected.add(tenant); res.note = `Workday says: "${(lastErr || 'the login was refused').replace(/"/g, "'")}". ${why}`; return false }
   for (let attempt = 0; attempt < 2; attempt++) {
+    // Never more than two password submissions per employer in a run, whichever path got here.
+    if (tenant && (pwSubmits.get(tenant) || 0) >= 2) return stop('The saved login was refused twice here, so the app will not try again (repeated tries can lock the account). Sign in yourself in the browser; the app carries on once you are in.')
     if (!(await typeLogin(p, login))) { res.note = 'Workday sign-in: the email and password did not stay in the boxes, so the app did not press Sign In. It tries again on the next look.'; return false }
+    if (tenant) pwSubmits.set(tenant, (pwSubmits.get(tenant) || 0) + 1)
     await pressWd(p, 'signInSubmitButton')
     res.filled.push(attempt ? 'Pressed Sign In again (fresh page)' : 'Signed in with your saved login')
     const gone = await p.locator('input[type="password"]:visible').first().waitFor({ state: 'hidden', timeout: 15_000 }).then(() => true).catch(() => false)
-    if (gone) return true
+    if (gone) { if (tenant) pwSubmits.delete(tenant); return true }
     const err = await wdError(p)
+    if (err) lastErr = err
     if (/verif|activat|confirm your/i.test(err)) { if (tenant) loginRejected.add(tenant); res.note = `Workday says: "${err}". The account needs its email confirmed first; the app looks for that email in Gmail.`; return false }
     if (/password|incorrect|invalid|locked|wrong/i.test(err) && attempt === 0) {
-      // One more try on a fresh page: a half-loaded form can drop what was typed.
+      // One more try on a fresh page: a half-loaded form can drop what was typed. Some employers (Hitachi) reload onto
+      // the social sign-in menu, so "Sign in with email" has to be chosen again first.
       await p.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
-      await p.locator('input[type="password"]:visible').first().waitFor({ timeout: 25_000 }).catch(() => {})
+      await p.locator(`input[type="password"]:visible, ${wd('SignInWithEmailButton')}, ${wd('CreateAccountWithEmailButton')}`)
+        .or(p.getByText(/^\s*(sign in|create (an )?account) with email\s*$/i)).first().waitFor({ timeout: 25_000 }).catch(() => {})
+      await openEmailSignIn(p)
       await toSignIn(p)
-      if (!(await p.locator(wd('signInSubmitButton')).first().isVisible().catch(() => false))) { res.note = 'Workday sign-in did not come back after refreshing. The app tries again on the next look.'; return false }
+      if (!(await p.locator(wd('signInSubmitButton')).first().isVisible().catch(() => false))) return stop('The sign-in form did not come back after refreshing, so the app will not submit the login again (repeated tries can lock the account). Sign in yourself in the browser; the app carries on once you are in.')
       continue
     }
-    if (/password|incorrect|invalid|locked|wrong/i.test(err)) { if (tenant) loginRejected.add(tenant); res.note = `Workday says: "${err}".`; return false }
+    if (/password|incorrect|invalid|locked|wrong/i.test(err)) return stop('')
   }
   res.note = 'Workday did not get past sign-in. Sign in yourself in the browser; the app carries on once you are in.'
   return false
@@ -1760,7 +1783,7 @@ async function authStep(p: Page, tenant: string, hooks: WorkdayHooks): Promise<P
           res.filled.push('Sign-in was refused, so the app pressed Create Account')
           const made = await p.locator(wd('verifyPassword')).first().waitFor({ state: 'hidden', timeout: 15_000 }).then(() => true).catch(() => false)
           const err = await wdError(p)
-          if (made && !err) { loginRejected.delete(tenant); res.note = 'There was no account here yet, so the app created one with your saved login. If Workday emails a confirmation link, the app opens it from Gmail.'; return res }
+          if (made && !err) { forgetRejected(tenant); res.note = 'There was no account here yet, so the app created one with your saved login. If Workday emails a confirmation link, the app opens it from Gmail.'; return res }
           res.note = `Workday says: "${(err || 'the login was refused').replace(/"/g, "'")}". An account with this email already exists here and refused the saved password twice, so it is probably locked after earlier tries. The app stops here so it is not locked further: sign in yourself once in a browser (Workday unlocks after a while), and the app carries on next time.`
         }
       }
@@ -1831,6 +1854,7 @@ async function workdayStep(p: Page, args: Args, hooks: WorkdayHooks): Promise<Pr
   // The menu loads after the progress bar, so wait for either it or the password boxes before deciding.
   if (authPage) await p.locator(`input[type="password"]:visible, ${wd('SignInWithEmailButton')}, ${wd('CreateAccountWithEmailButton')}`)
     .or(p.getByText(/^\s*(sign in|create (an )?account) with email\s*$/i)).first().waitFor({ timeout: 10_000 }).catch(() => {})
+  if (authPage && loginRejected.has(tenant)) return blank('Workday sign-in', REFUSED_AGAIN)
   if (await openEmailSignIn(p)) return blank('Workday sign-in', 'Chose "Sign in with email". The app signs in on the next look.')
   if ((await p.locator('input[type="password"]:visible').count().catch(() => 0)) > 0) return authStep(p, tenant, hooks)
   if (authPage) return blank('Workday sign-in', 'The sign-in page is still loading. The app tries again when it appears; if it does not, press "Fill this page again".')
@@ -2234,7 +2258,7 @@ export async function fillAgain(args: Args, hooks: WorkdayHooks): Promise<Prefil
 }
 
 /** For tests: fill whatever page is open, without the Workday walk. */
-export const _test = { removeEmptyWorkdayBlocks, attachSuccessFactorsFiles, applyAnswer, ownValue, mustTick, never, sameDiscipline, fillStudy, addSuccessFactorsEducation, studyChooser, studyTerms, successFactorsApply, siteSignIn, pages: (): string[] => (context?.pages() || []).map(x => x.url()), stopWatching, pressContinue, prefill, closeBrowser,  collectAll, fillCurrentPage, bestOption, workdayStep, pickInCombobox, visibleOptions }
+export const _test = { removeEmptyWorkdayBlocks, attachSuccessFactorsFiles, applyAnswer, ownValue, mustTick, never, sameDiscipline, fillStudy, addSuccessFactorsEducation, studyChooser, studyTerms, successFactorsApply, siteSignIn, pages: (): string[] => (context?.pages() || []).map(x => x.url()), stopWatching, pressContinue, prefill, closeBrowser,  collectAll, attachFiles, fillCurrentPage, bestOption, workdayStep, pickInCombobox, visibleOptions }
 
 /** A fresh tab in the application browser, for auto-apply. */
 async function newTab(profileDir: string, hidden = false): Promise<Page> {

@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test:sources": "node --no-warnings --import ./scripts/resolve-ts.mjs scripts/test-sources.ts",
     "package": "electron-vite build && electron-builder --mac dir",
-    "test": "node --no-warnings --import ./scripts/resolve-ts.mjs scripts/test-rules.ts && node --no-warnings --import ./scripts/resolve-ts.mjs scripts/test-collect.ts && node --no-warnings --import ./scripts/resolve-ts.mjs scripts/test-term-rules.ts && node --no-warnings --import ./scripts/resolve-ts.mjs scripts/test-field-of-study.ts && IH_AUTOAPPLY_LIMIT_MS=40000 node --no-warnings --import ./scripts/resolve-ts.mjs scripts/try-autoapply.ts"
+    "test": "node --no-warnings --import ./scripts/resolve-ts.mjs scripts/test-rules.ts && node --no-warnings --import ./scripts/resolve-ts.mjs scripts/test-collect.ts && node --no-warnings --import ./scripts/resolve-ts.mjs scripts/test-term-rules.ts && node --no-warnings --import ./scripts/resolve-ts.mjs scripts/test-field-of-study.ts && node --no-warnings --import ./scripts/resolve-ts.mjs scripts/try-workday-signin.ts && IH_AUTOAPPLY_LIMIT_MS=40000 node --no-warnings --import ./scripts/resolve-ts.mjs scripts/try-autoapply.ts"
   },
   "build": {
     "appId": "local.jarvis-internships",
