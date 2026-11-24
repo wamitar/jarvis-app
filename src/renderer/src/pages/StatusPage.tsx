@@ -27,6 +27,7 @@ const took = (j: LiveJob): string => {
 export function StatusPage({ state, jobs, activity, reload, openJob }: { state: AppState; jobs: Job[]; activity: Activity; reload: () => Promise<void>; openJob: (id: string) => void }) {
   const [run, setRun] = useState<LiveRun | null>(null)
   const [auto, setAuto] = useState<Record<string, AutoApplyResult>>(state.autoApply || {})
+  const [skipping, setSkipping] = useState('')
   const [, tick] = useState(0)
   useEffect(() => {
     window.api.getLiveRun().then(setRun)
@@ -48,7 +49,8 @@ export function StatusPage({ state, jobs, activity, reload, openJob }: { state: 
   const current = run?.running ? run.jobs.find(j => j.state === 'tailoring' || j.state === 'working') : undefined
   const doneCount = run ? run.jobs.filter(j => !['waiting', 'tailoring', 'working'].includes(j.state)).length : 0
   const clear = async (id: string): Promise<void> => { await window.api.clearAutoApplyFlag(id); setAuto(a => { const n = { ...a }; delete n[id]; return n }); await reload() }
-  const tasks = activity.tasks.filter(t => !/^Waiting for (Claude|Codex)$/.test(t))
+  const manual = activity.tasks.filter(t => /^Filling an application$|^Watching the application/.test(t))
+  const other = activity.tasks.filter(t => !/^Auto-appl|^Waiting for (Claude|Codex)$|^Filling an application$|^Watching the application/.test(t))
 
   return (
     <div className="page">
@@ -63,20 +65,33 @@ export function StatusPage({ state, jobs, activity, reload, openJob }: { state: 
 
       <div className="card">
         <h3>Right now</h3>
-        {current ? (<>
-          <div className="now">
-            <span className="lamp on" />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div><b>{current.company}</b> · <a onClick={() => openJob(current.jobId)}>{current.title}</a></div>
-              <div className="muted small">Job {doneCount + 1} of {run!.jobs.length} · {current.state === 'tailoring' ? `${ai()} is tailoring the resume` : current.page || 'Opening the application'} · {took(current)}</div>
+        <div className="lane">
+          <div className="muted small">Auto-apply</div>
+          {current ? (<>
+            <div className="now">
+              <span className="lamp on" />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div><b>{current.company}</b> · <a onClick={() => openJob(current.jobId)}>{current.title}</a></div>
+                <div className="muted small">Job {doneCount + 1} of {run!.jobs.length} · {current.state === 'tailoring' ? `${ai()} is tailoring the resume` : current.page || 'Opening the application'} · {took(current)}</div>
+              </div>
+              <span className="rowx"><button className="btn sm" disabled={skipping === current.jobId} onClick={() => { setSkipping(current.jobId); window.api.skipAutoApply(current.jobId).catch(() => setSkipping('')) }}>Skip</button></span>
             </div>
-          </div>
-          {current.steps.length > 0 && <ol className="steps">{current.steps.slice(-8).map((s, i) => <li key={i}>{s}</li>)}</ol>}
-        </>) : activity.working ? (
-          <div className="now"><span className="lamp on" /><div>{tasks[tasks.length - 1] || 'Working'}{activity.tasks.some(t => /^Waiting for/.test(t)) ? ` (waiting for ${ai()})` : ''}</div></div>
-        ) : (
-          <div className="now"><span className="lamp" /><div className="muted">Idle.{run?.endedAt ? ` The last auto-apply run ended ${when(run.endedAt)}: ${run.jobs.filter(j => j.state === 'applied').length} submitted, ${run.jobs.filter(j => j.state === 'flagged').length} need you${run.jobs.some(j => j.state === 'skipped') ? `, ${run.jobs.filter(j => j.state === 'skipped').length} not reached` : ''}.` : ' Start auto-apply from the Jobs page and follow it here.'}</div></div>
-        )}
+            {current.steps.length > 0 && <ol className="steps">{current.steps.slice(-8).map((s, i) => <li key={i}>{s}</li>)}</ol>}
+          </>) : run?.running ? (
+            <div className="now"><span className="lamp on" /><div>Starting the next job</div></div>
+          ) : (
+            <div className="now"><span className="lamp" /><div className="muted">Idle.{run?.endedAt ? ` The last run ended ${when(run.endedAt)}: ${run.jobs.filter(j => j.state === 'applied').length} submitted, ${run.jobs.filter(j => j.state === 'flagged').length} need you${run.jobs.some(j => j.state === 'skipped') ? `, ${run.jobs.filter(j => j.state === 'skipped').length} not reached` : ''}.` : ' Start auto-apply from the Jobs page and follow it here.'}</div></div>
+          )}
+        </div>
+        <div className="lane">
+          <div className="muted small">Manual applications</div>
+          {manual.length ? (
+            <div className="now"><span className="lamp on" /><div>{manual[manual.length - 1]}{activity.tasks.some(t => /^Waiting for/.test(t)) ? ` (waiting for ${ai()})` : ''}</div></div>
+          ) : (
+            <div className="now"><span className="lamp" /><div className="muted">Idle.</div></div>
+          )}
+        </div>
+        {other.length > 0 && <div className="muted small">Also running: {other.join(', ')}</div>}
       </div>
 
       {run && run.jobs.length > 0 && (
@@ -84,7 +99,7 @@ export function StatusPage({ state, jobs, activity, reload, openJob }: { state: 
           <h3>{run.running ? 'This run' : 'Last run'} <span className="muted small" style={{ fontWeight: 400 }}>started {when(run.startedAt)} · {doneCount} of {run.jobs.length} done</span></h3>
           <div className="runlist">{run.jobs.map(j => (
             <div key={j.jobId} className={'runrow' + (j === current ? ' on' : '')}>
-              <span className={'pill ' + STATE[j.state][1]}>{STATE[j.state][0]}</span>
+              <span className={'pill ' + STATE[j.state][1]}>{j.reason === 'Skipped by you' ? 'Skipped' : STATE[j.state][0]}</span>
               <div style={{ minWidth: 0 }}>
                 <div className="ellipsis"><b>{j.company}</b> · <a onClick={() => openJob(j.jobId)}>{j.title}</a></div>
                 {(j.reason || (j.page && j.state !== 'waiting')) && <div className="muted small ellipsis">{j.reason ? `${j.reason}${j.page ? ` (on ${j.page})` : ''}` : j.page}</div>}

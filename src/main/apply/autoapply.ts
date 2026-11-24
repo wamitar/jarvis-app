@@ -22,7 +22,7 @@ export interface AutoApplyDeps {
   onResult(r: AutoApplyResult): void
   onProgress(done: number, total: number, label: string): void
   /** Live detail for the Status page: state changes, the page it is on, and each step taken. */
-  onLive?(jobId: string, ev: { state?: LiveJob['state']; page?: string; step?: string; reason?: string }): void
+  onLive?(jobId: string, ev: { state?: LiveJob['state']; page?: string; step?: string; reason?: string; end?: boolean }): void
 }
 
 /** Per-job limit. IH_AUTOAPPLY_LIMIT_MS shortens it for tests. */
@@ -50,6 +50,10 @@ const VERIFY_EMAIL = /verify your (email|account)|verification (code|link|email)
 const SUBMIT_TEXT = /^\s*(submit( (my |your )?application)?|send application|complete application|finish( application)?|apply)\s*$/i
 const NEXT_TEXT = /^\s*(next|continue|save (and|&) continue|save and next|proceed)\s*$/i
 
+class Skipped extends Error {}
+// skipCurrent() rejects the running job's race; the token lets a drive() left running in the background see it was skipped.
+let skipNow: (() => void) | null = null, skipJobId = '', jobToken = 0, skippedToken = -1
+export function skipCurrent(jobId: string): boolean { if (!skipNow || jobId !== skipJobId) return false; skippedToken = jobToken; skipNow(); return true }
 class Flag extends Error { questions: string[]; constructor(reason: string, questions: string[] = []) { super(reason); this.questions = questions } }
 
 /** The page's text, followed by that of its embedded frames (Greenhouse forms on an employer's own site sit in an iframe). */
@@ -324,8 +328,9 @@ async function drive(start: Page, args: Args, hooks: WorkdayHooks, deadline: num
   let lastSig = '', same = 0, filledHere = '', mailTries = 0, glitches = 0, emailSteps = 0, sfReset = false
   const started = Date.now()
   const opened = new Set(A.openPages())
+  const myToken = jobToken
   // Past the deadline the run has already been flagged and its tabs closed: stop here rather than touch the next job's tab.
-  const current = (): Page => { if (Date.now() >= deadline) throw new Flag(`took longer than ${limitText()}`); const mine = A.openPages().filter(x => x === start || !opened.has(x)); return mine[mine.length - 1] || start }
+  const current = (): Page => { if (skippedToken === myToken) throw new Skipped('skipped by you'); if (Date.now() >= deadline) throw new Flag(`took longer than ${limitText()}`); const mine = A.openPages().filter(x => x === start || !opened.has(x)); return mine[mine.length - 1] || start }
   while (Date.now() < deadline) {
     checkStop()
     const p = current()
@@ -538,11 +543,15 @@ export async function runAutoApply(jobIds: string[], deps: AutoApplyDeps): Promi
       let closed = false
       const keep = (r: PrefillResult): void => { if (!closed) for (const g of r.guesses || []) if (!guesses.some(x => x.q === g.q)) guesses.push(g) }
       const result = (outcome: AutoApplyResult['outcome'], reason: string, shot = '', questions: string[] = []): AutoApplyResult => ({ jobId, outcome, reason, page: where, at: new Date().toISOString(), shot, ...(questions.length ? { questions } : {}), ...(guesses.length ? { notes: [...guesses] } : {}) })
+      jobToken++
+      const skipP = new Promise<never>((_, rej) => { skipNow = () => rej(new Skipped('skipped by you')) })
+      skipP.catch(() => {})
+      skipJobId = jobId
       const stepEnd = begin(`Auto-apply ${done + 1} of ${jobIds.length}`)
       try {
         deps.onProgress(done, jobIds.length, 'Tailoring the resume')
         deps.onLive?.(jobId, { state: 'tailoring', page: 'Tailoring the resume' })
-        const args = await deps.prepare(jobId)
+        const args = await Promise.race([deps.prepare(jobId), skipP])
         deps.onLive?.(jobId, { state: 'working', page: 'Opening the application' })
         deps.onProgress(done, jobIds.length, `${args[0].company}: ${args[0].title}`)
         page = await A.newTab(deps.profileDir, deps.hidden !== false)
@@ -551,12 +560,15 @@ export async function runAutoApply(jobIds: string[], deps: AutoApplyDeps): Promi
         A.setFillDeadline(deadline)
         await Promise.race([
           drive(page, args, deps.hooks(jobId), deadline, s => { where = s; deps.onLive?.(jobId, { page: s }) }, step => deps.onLive?.(jobId, { step }), keep),
-          new Promise((_, reject) => setTimeout(() => reject(new Flag(`took longer than ${limitText()}`)), LIMIT_MS))
+          new Promise((_, reject) => setTimeout(() => reject(new Flag(`took longer than ${limitText()}`)), LIMIT_MS)),
+          skipP
         ])
+        skipNow = null   // submitted: too late to skip
         applied++
         deps.onResult(result('applied', 'Submitted and confirmed'))
       } catch (e) {
         if (e instanceof StoppedError) { deps.onResult(result('flagged', 'stopped by you before it finished')); break }
+        if (e instanceof Skipped) { deps.onLive?.(jobId, { state: 'skipped', reason: 'Skipped by you', end: true }); continue }
         flagged++
         let shot = ''
         const visible = page && !page.isClosed() ? A.openPages().filter(x => x === page || x.url() !== 'about:blank').pop() || page : null
@@ -564,6 +576,7 @@ export async function runAutoApply(jobIds: string[], deps: AutoApplyDeps): Promi
         const reason = e instanceof Flag ? e.message : `error: ${(e as Error).message.split('\n')[0].slice(0, 140)}`
         deps.onResult(result(/^dry run/.test(reason) ? 'dryrun' : 'flagged', reason, shot, e instanceof Flag ? e.questions : []))
       } finally {
+        skipNow = null
         closed = true
         A.setFillDeadline(Infinity)   // manual "Pre-fill" afterwards has no deadline
         stepEnd()

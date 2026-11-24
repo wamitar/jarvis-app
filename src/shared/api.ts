@@ -46,6 +46,7 @@ export interface Api {
   onAutoApply(fn: (r: AutoApplyResult) => void): () => void
   onLiveRun(fn: (r: LiveRun) => void): () => void
   getLiveRun(): Promise<LiveRun | null>
+  skipAutoApply(jobId: string): Promise<boolean>
   getActivity(): Promise<Activity>
   stopAll(): Promise<Activity>
   onActivity(fn: (a: Activity) => void): () => void
@@ -55,4 +56,4 @@ export interface Api {
 }
 
 export const CHANNELS = ['getState', 'importResume', 'chooseResumePdf', 'addDocuments', 'setDocumentKind', 'removeDocument', 'revealDocument', 'revealResumePdf', 'saveResume', 'saveProfile', 'saveSettings', 'listJobs', 'getJob', 'updateJob', 'refresh',
-  'score', 'rescore', 'setWorkdayLogin', 'clearWorkdayLogin', 'connectGmail', 'disconnectGmail', 'addJob', 'tailor', 'saveTailored', 'revealPdf', 'prefill', 'fillAgain', 'openExternal', 'getActivity', 'stopAll', 'autoApply', 'clearAutoApplyFlag', 'saveAnswers', 'clearAllAutoApplyFlags', 'getLiveRun', 'showAutoApplyShot'] as const
+  'score', 'rescore', 'setWorkdayLogin', 'clearWorkdayLogin', 'connectGmail', 'disconnectGmail', 'addJob', 'tailor', 'saveTailored', 'revealPdf', 'prefill', 'fillAgain', 'openExternal', 'getActivity', 'stopAll', 'autoApply', 'clearAutoApplyFlag', 'saveAnswers', 'clearAllAutoApplyFlags', 'getLiveRun', 'skipAutoApply', 'showAutoApplyShot'] as const

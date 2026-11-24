@@ -142,3 +142,5 @@ ul.plain { margin: 0; padding-left: 18px; } ul.plain li { margin-bottom: 2px; }
 .runrow .pill { justify-self: start; }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 640px) { .runrow { grid-template-columns: 1fr; gap: 4px; } }
+.lane + .lane { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.lane > .muted { margin-bottom: 4px; }

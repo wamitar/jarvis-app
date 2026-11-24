@@ -22,7 +22,7 @@ import { UA, htmlToText, siteFetch } from './sources/util'
 import { regionOf, setRulesFromProfile, textProblem } from './filter'
 import { closeBrowser, fillAgain, prefill, stopWatching, useDocuments, type WorkdayHooks } from './apply/prefill'
 import { addDocuments, removeDocumentFile } from './docs'
-import { runAutoApply } from './apply/autoapply'
+import { runAutoApply, skipCurrent } from './apply/autoapply'
 
 // The data folder keeps its original name so a rename of the app never loses data.
 // Tests point IH_USER_DATA at a throwaway folder so they never touch real data.
@@ -291,6 +291,7 @@ function handlers(): void {
     return prefill(join(app.getPath('userData'), 'apply-browser'), a, wdHooks(jobId))
   }, 'Filling an application')
   h('getLiveRun', () => liveRun())
+  h('skipAutoApply', (jobId: string) => skipCurrent(jobId))
   h('autoApply', (jobIds: string[]) => exclusive(() => { startLive(jobIds); return runAutoApply(jobIds, {
     profileDir: join(app.getPath('userData'), 'apply-browser'),
     shotDir: join(app.getPath('userData'), 'autoapply'),
