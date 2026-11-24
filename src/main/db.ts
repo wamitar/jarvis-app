@@ -70,6 +70,9 @@ export function unscoredJobs(): Job[] {
 export function setScore(id: string, score: number, reasons: string[], missing: string[]): void {
   db.prepare('UPDATE jobs SET score = ?, reasons = ?, missing = ? WHERE id = ?').run(score, JSON.stringify(reasons), JSON.stringify(missing), id)
 }
+export function setApplyUrl(id: string, url: string): void {
+  db.prepare('UPDATE jobs SET apply_url = ? WHERE id = ?').run(url, id)
+}
 export function setDescription(id: string, description: string): void {
   db.prepare('UPDATE jobs SET description = ? WHERE id = ?').run(description, id)
 }

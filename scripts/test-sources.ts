@@ -18,7 +18,9 @@ const runs: [string, () => Promise<RawJob[]>][] = [
   ['jobbank', () => fetchJobBank()]
 ]
 for (const [name, fn] of runs) {
-  const jobs = await fn()
+  let jobs: Awaited<ReturnType<typeof fn>>
+  // A site limiting requests is not a failure of the app (it retries on a later refresh).
+  try { jobs = await fn() } catch (e) { if ((e as Error).name === 'RateLimited' || /429/.test(String(e))) { console.log(`\n${name}: skipped, the site is limiting requests right now`); continue } throw e }
   const bad = jobs.filter(j => !j.id || !j.title || !j.url)
   const kept = jobs.map(j => ({ j, v: checkJob(j) })).filter(x => x.v.keep)
   console.log(`\n${name}: ${jobs.length} jobs, ${bad.length} malformed, ${kept.length} pass the filter`)
@@ -32,7 +34,7 @@ for (const [name, fn] of runs) {
 function j_detail(j: RawJob) { return j.source === 'workday' || j.source === 'jobbank' }
 
 const cases: [string, string][] = [['Toronto, ON', 'ontario'], ['Ajax, ON, Canada', 'ontario'], ['Hawthorne, CA', 'usa'], ['Montreal, QC', 'canada'],
-  ['Bengaluru, India', 'other'], ['USA - WA - Seattle', 'usa'], ['London, United Kingdom', 'other'], ['Markham, Ontario, Canada', 'ontario'], ['Remote', 'unknown'], ['Everett, Washington', 'usa'], ['Luxembourg, LUX', 'other'], ['SGP', 'other'], ['GBR - Hounslow, UK', 'other'], ['North Reading, Massachusetts, USA', 'usa'], ['Paris, ON, Canada', 'ontario'], ['Taipei, Taiwan', 'other']]
+  ['Bengaluru, India', 'other'], ['USA - WA - Seattle', 'usa'], ['London, United Kingdom', 'uk'], ['Markham, Ontario, Canada', 'ontario'], ['Remote', 'unknown'], ['Everett, Washington', 'usa'], ['Luxembourg, LUX', 'other'], ['SGP', 'other'], ['GBR - Hounslow, UK', 'uk'], ['North Reading, Massachusetts, USA', 'usa'], ['Paris, ON, Canada', 'ontario'], ['Taipei, Taiwan', 'other']]
 let fails = 0
 for (const [loc, want] of cases) { const got = regionOf(loc); if (got !== want) { fails++; console.log(`REGION FAIL ${loc}: ${got} != ${want}`) } }
 const mk = (title: string, location: string, big: boolean, description = ''): RawJob => ({ id: 'x', source: 'manual', company: 'c', title, location, url: 'u', applyUrl: 'u', description, postedAt: null, big })

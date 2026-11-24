@@ -1,4 +1,5 @@
 import { ai } from '../ai'
+import { AnswerQuestions } from '../components/AnswerQuestions'
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { diffWordsWithSpace } from 'diff'
 import type { AppState } from '../../../shared/api'
@@ -210,6 +211,10 @@ function JobDetail({ job, flag, clearFlag, noScores, state, reload, notify, go }
       {flag && flag.outcome !== 'applied' && (
         <div className="banner warn" style={{ marginTop: 12 }}><span><b>Auto-apply skipped this job:</b> {flag.reason}{flag.page ? ` (on "${flag.page}")` : ''}, {new Date(flag.at).toLocaleString()}.</span>
           <span className="rowx">{flag.shot && <button className="btn sm" onClick={() => window.api.showAutoApplyShot(job.id)}>Show screenshot</button>}<button className="btn ghost sm" onClick={clearFlag}>Clear flag</button></span></div>
+      )}
+      {flag && flag.outcome !== 'applied' && flag.questions && flag.questions.length > 0 && (
+        <div className="card" style={{ marginTop: 8 }}><b>Answer once, and auto-apply reuses it everywhere</b>
+          <AnswerQuestions key={flag.questions.join('|')} jobId={job.id} questions={flag.questions} onSaved={async () => { await clearFlag(); await reload(); notify('Saved. Auto-apply will use these answers from now on.') }} /></div>
       )}
       <div className="rowx" style={{ marginTop: 12 }}>
         {job.url && <button className="btn" onClick={() => window.api.openExternal(job.url)}>Open posting</button>}

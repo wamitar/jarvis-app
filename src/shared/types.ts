@@ -62,7 +62,12 @@ export interface Profile {
   extra: string         // free-form facts Claude may use for screening answers
   moreProjects: Resume['projects']   // projects not on the resume; tailoring picks whichever fit a posting best
   moreSkills: string    // software and skills the candidate has beyond the resume; tailoring may list them
+  /** The candidate's own answers to application questions, reused on every form that asks the same thing. */
+  answers?: SavedAnswer[]
+  /** Voluntary self-identification answers. Blank = decline to answer wherever the form allows it. */
+  eeoGender?: string; eeoHispanic?: string; eeoRace?: string; eeoVeteran?: string; eeoDisability?: string
 }
+export interface SavedAnswer { q: string; a: string; at?: string }
 
 /** One job's outcome from an auto-apply run. */
 /** One job in the current (or last) auto-apply run, for the Status page. */
@@ -75,7 +80,10 @@ export interface LiveJob {
   startedAt?: string; endedAt?: string
 }
 export interface LiveRun { running: boolean; startedAt: string; endedAt?: string; jobs: LiveJob[] }
-export interface AutoApplyResult { jobId: string; outcome: 'applied' | 'flagged' | 'dryrun'; reason: string; page: string; at: string; shot: string }
+export interface AutoApplyResult {
+  jobId: string; outcome: 'applied' | 'flagged' | 'dryrun'; reason: string; page: string; at: string; shot: string
+  questions?: string[]   // required questions the app could not answer, word for word, so the user can answer them once
+}
 
 /** What the app is doing right now (sidebar status light). */
 export interface Activity { working: boolean; stopping: boolean; tasks: string[] }
@@ -100,6 +108,7 @@ export interface PrefillResult {
   skipped: string[]
   drafted: { question: string; answer: string }[]
   note: string
+  missing?: string[]    // required questions still empty after filling, word for word
 }
 
 export interface Settings {
@@ -143,7 +152,8 @@ export const emptyProfile = (): Profile => ({
   firstName: '', lastName: '', email: '', phone: '', address: '', city: '', province: '', postalCode: '', country: 'Canada',
   linkedin: '', website: '', github: '', school: '', degree: '', major: 'Mechanical Engineering', gpa: '',
   graduation: '', citizenship: '', citizenshipDates: '', workAuthCanada: '', workAuthUsa: '', workAuthUk: '', needsSponsorship: '', sponsorshipUsa: '', sponsorshipUk: '', availability: '',
-  termLength: '', willingToRelocate: '', extra: '', moreProjects: [], moreSkills: ''
+  termLength: '', willingToRelocate: '', extra: '', moreProjects: [], moreSkills: '', answers: [],
+  eeoGender: '', eeoHispanic: '', eeoRace: '', eeoVeteran: '', eeoDisability: ''
 })
 
 export const defaultSettings = (): Settings => ({

@@ -3,21 +3,22 @@ import { join } from 'node:path'
 import { rm } from 'node:fs/promises'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { basename } from 'node:path'
-import type { AutoApplyResult, DocFile, DocKind, Job, JobStatus, PrefillResult, Profile, RawJob, RefreshProgress, Resume, Settings, Tailored, Usage, WorkdayLogin, LiveJob, LiveRun } from '../shared/types'
+import type { AutoApplyResult, DocFile, DocKind, Job, JobStatus, PrefillResult, Profile, RawJob, RefreshProgress, Resume, SavedAnswer, Settings, Tailored, Usage, WorkdayLogin, LiveJob, LiveRun } from '../shared/types'
 import { defaultSettings, emptyProfile, emptyResume } from '../shared/types'
 import type { AppState } from '../shared/api'
 import * as db from './db'
+import { resolveStored } from './sources/linkedin-resolve'
 import { aiFound, aiName, askJson, setProvider, setUsageListener } from './ai/claude'
 import * as keychain from './keychain'
 import * as gmail from './mail/gmail'
 import { normalizeResume, pdfToText, structureResume } from './resume/parse'
 import { tailorResume, shortenResume, findInventions, bankOf } from './resume/tailor'
-import { getActivity, setActivityListener, stopAll, track } from './activity'
+import { getActivity, setActivityListener, stopAll, track, StoppedError } from './activity'
 import { compileLatex, findTectonic, resumeLatex } from './resume/latex'
 import { htmlToPdf, letterHtml, resumeHtml, safeName } from './resume/render'
 import { refreshJobs, scorePending } from './refresh'
 import { allBoards, setDiscoveredBoards } from './sources'
-import { UA, htmlToText } from './sources/util'
+import { UA, htmlToText, siteFetch } from './sources/util'
 import { regionOf, setRulesFromProfile, textProblem } from './filter'
 import { closeBrowser, fillAgain, prefill, stopWatching, useDocuments, type WorkdayHooks } from './apply/prefill'
 import { addDocuments, removeDocumentFile } from './docs'
@@ -220,7 +221,7 @@ function handlers(): void {
     if (url && !/^https?:\/\//i.test(url)) throw new Error('The link must start with http:// or https://')
     if (!text) {
       if (!url) throw new Error('Paste a link or the posting text.')
-      const r = await fetch(url, { headers: UA, signal: AbortSignal.timeout(25_000) }).catch(() => null)
+      const r = await siteFetch(url, { headers: UA, signal: AbortSignal.timeout(25_000) }).catch(() => null)
       text = r && r.ok ? htmlToText(await r.text()) : ''
       if (text.length < 300) throw new Error('That site would not show the posting to the app. Copy the posting text from your browser and paste it in the box.')
     }
@@ -295,9 +296,26 @@ function handlers(): void {
     shotDir: join(app.getPath('userData'), 'autoapply'),
     hidden: settings().autoApplyWindow !== 'minimized',
     prepare: async jobId => {
+      // A LinkedIn-alert job is first found on the employer's own site (if it was not already), and then tailored
+      // to that full posting rather than the alert's one-line summary.
+      let found = false
+      const j0 = db.getJob(jobId)
+      if (j0?.source === 'linkedin' && /linkedin\.com/i.test(j0.applyUrl || j0.url)) {
+        updateLive(jobId, { step: `Looking for this job on ${j0.company}'s own careers site` })
+        found = await resolveStored(jobId, 86400_000).catch(e => { if (e instanceof StoppedError) throw e; return false })
+      }
       const t = db.getTailored(jobId)
-      const fresh = t && Date.now() - new Date(t.updatedAt).getTime() < 7 * 24 * 3600_000
-      if (!fresh) await tailorJob(jobId, true)
+      const fresh = t && !found && Date.now() - new Date(t.updatedAt).getTime() < 7 * 24 * 3600_000
+      // A failed tailoring (the AI timing out, say) does not cost the application: it goes ahead with the last
+      // tailored resume for this job, or the user's own resume PDF.
+      if (!fresh) {
+        try { await tailorJob(jobId, true) }
+        catch (e) {
+          if (e instanceof StoppedError) throw e
+          if (!t && !resumePdf()) throw e
+          updateLive(jobId, { step: `Tailoring failed (${(e as Error).message.slice(0, 80)}), so your ${t ? 'last tailored' : 'own'} resume is attached` })
+        }
+      }
       return applyArgs(jobId)
     },
     hooks: jobId => ({ ...wdHooks(jobId), autoContinue: true, onUpdate: () => {} }),
@@ -307,6 +325,10 @@ function handlers(): void {
       if (r.outcome === 'applied') {
         const j = db.getJob(r.jobId)
         db.updateJob(r.jobId, { status: 'applied', notes: `${j?.notes ? j.notes + '\n' : ''}Auto-applied ${new Date().toLocaleDateString()}` })
+      } else if (/posting has closed/i.test(r.reason)) {
+        // A closed posting leaves the job list (it stays under Hidden, and a refresh never adds it back).
+        const j = db.getJob(r.jobId)
+        if (j && j.status !== 'applied') db.updateJob(r.jobId, { status: 'hidden', notes: `${j.notes ? j.notes + '\n' : ''}Posting closed ${new Date().toLocaleDateString()}` })
       }
       send('autoApply', r)
       updateLive(r.jobId, { state: r.outcome, reason: r.outcome === 'applied' ? '' : r.reason, page: r.page, end: true })
@@ -316,6 +338,17 @@ function handlers(): void {
   }).finally(endLive) }), 'Auto-applying')
   // Clears every auto-apply mark (flagged / dry run / failed) except real applications, so those jobs can be tried again.
   h('clearAllAutoApplyFlags', () => { const all = db.kvGet<Record<string, AutoApplyResult>>('autoApply', {}); for (const k of Object.keys(all)) if (all[k].outcome !== 'applied') delete all[k]; db.kvSet('autoApply', all) })
+  // Answers the user typed for questions auto-apply could not answer: kept in the profile for every later form, and the
+  // job's flag is cleared so the next run tries it again.
+  h('saveAnswers', (jobId: string, list: SavedAnswer[]) => {
+    const p = { ...emptyProfile(), ...db.kvGet<Profile>('profile', emptyProfile()) }
+    const key = (q: string): string => q.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+    const add = (list || []).map(x => ({ q: String(x.q || '').trim().slice(0, 500), a: String(x.a || '').trim().slice(0, 2000), at: new Date().toISOString() })).filter(x => x.q && x.a)
+    if (!add.length) return
+    const keep = (p.answers || []).filter(x => !add.some(y => key(y.q) === key(x.q)))
+    db.kvSet('profile', { ...p, answers: [...keep, ...add] })
+    if (jobId) { const all = db.kvGet<Record<string, AutoApplyResult>>('autoApply', {}); if (all[jobId]?.outcome !== 'applied') { delete all[jobId]; db.kvSet('autoApply', all) } }
+  })
   h('clearAutoApplyFlag', (jobId: string) => { const all = db.kvGet<Record<string, AutoApplyResult>>('autoApply', {}); delete all[jobId]; db.kvSet('autoApply', all) })
   h('showAutoApplyShot', (jobId: string) => { const r = db.kvGet<Record<string, AutoApplyResult>>('autoApply', {})[jobId]; if (r?.shot && existsSync(r.shot)) return shell.openPath(r.shot) })
   h('fillAgain', async (jobId: string) => fillAgain(await applyArgs(jobId), wdHooks(jobId)), 'Filling an application')

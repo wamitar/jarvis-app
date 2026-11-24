@@ -5,9 +5,10 @@ import { checkJob, isInternTitle, regionOf, setRulesFromProfile, textProblem, uk
 import { allBoards, fetchAll, fetchDetail, setDiscoveredBoards } from './sources'
 import { discoverBoards } from './sources/simplify'
 import { fetchLinkedInAlerts } from './mail/linkedin-alerts'
+import { resolvePending } from './sources/linkedin-resolve'
 import * as gmail from './mail/gmail'
 import { pool, withTimeout } from './sources/util'
-import { aiName } from './ai/claude'
+import { aiFound, aiName } from './ai/claude'
 import { scoreJobs } from './match'
 import { US_DEFENSE } from './companies'
 import { isStopping, checkStop } from './activity'
@@ -79,6 +80,14 @@ export async function refreshJobs(settings: Settings, progress: (p: RefreshProgr
   checkStop()
   result.passed = direct.length
   for (const { j, region } of direct) if (db.insertJob(j, region)) result.added++
+
+  // LinkedIn-alert jobs: found on the employer's own site (the AI searches the web), so they carry the full posting
+  // and can be auto-applied there. At most 20 per refresh; a miss is tried again after three days.
+  if (settings.useLinkedInAlerts !== false && aiFound()) {
+    try {
+      await resolvePending(20, (d, n) => progress({ stage: 'Fetching', detail: 'LinkedIn jobs on employer sites', done: d, total: n }), isStopping)
+    } catch (e) { result.errors.push(`LinkedIn jobs on employer sites: ${(e as Error).message.slice(0, 160)}`) }
+  }
 
   result.removed = db.pruneJobs(r => (r.region !== 'usa' || (usAllowed(r.company, r.location) && !US_DEFENSE.has(r.company))) && (r.region !== 'uk' || ukAllowed(r.company)) && !(r.description && textProblem(r.title, r.description, r.region)))
 

@@ -85,17 +85,17 @@ export const aiFound = (): boolean => !!(provider === 'codex' ? findCodex() : fi
 const CODEX_OFF = ['shell_tool', 'unified_exec', 'apps', 'plugins', 'browser_use', 'browser_use_external', 'in_app_browser',
   'computer_use', 'code_mode_host', 'skill_search', 'tool_suggest', 'sleep_tool', 'goals', 'memories']
 
-async function runCodex(prompt: string, tier: string, timeoutMs: number): Promise<string> {
+async function runCodex(prompt: string, tier: string, timeoutMs: number, web = false): Promise<string> {
   const t = CODEX_MODELS[tier] || CODEX_MODELS.sonnet
   let last: unknown
   for (const model of t.models.filter(x => !codexRefused.has(x))) {
-    try { return await runCodexModel(prompt, { model, effort: t.effort }, timeoutMs) }
+    try { return await runCodexModel(prompt, { model, effort: t.effort }, timeoutMs, web) }
     catch (e) { if (!(e instanceof ModelRefused)) throw e; codexRefused.add(model); last = e }
   }
   throw new Error(`None of the Codex models for this setting are available on your account or Codex version (${t.models.join(', ')}). Updating Codex may help: ${String((last as Error)?.message || '')}`.slice(0, 400))
 }
 
-function runCodexModel(prompt: string, m: { model: string; effort: string }, timeoutMs: number): Promise<string> {
+function runCodexModel(prompt: string, m: { model: string; effort: string }, timeoutMs: number, web = false): Promise<string> {
   const cli = findCodex()
   if (!cli) return Promise.reject(new Error('Codex was not found on this Mac. Install it and sign in with `codex login`, or switch back to Claude in Settings.'))
   const dir = mkdtempSync(join(tmpdir(), 'ih-codex-'))   // an empty folder to run in
@@ -104,9 +104,10 @@ function runCodexModel(prompt: string, m: { model: string; effort: string }, tim
     delete env.OPENAI_API_KEY   // always use the signed-in ChatGPT account
     env.PATH = codexEnvPath()
     delete env.ELECTRON_RUN_AS_NODE
-    const args = ['exec', '--json', '--ephemeral', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '-s', 'read-only', '-C', dir,
-      '-m', m.model, '-c', `model_reasoning_effort="${m.effort}"`, '-c', 'approval_policy="never"', '-c', 'web_search="disabled"',
-      ...CODEX_OFF.flatMap(f => ['--disable', f]), '-']
+    const args = [...(web ? ['--search'] : []), 'exec', '--json', '--ephemeral', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '-s', 'read-only', '-C', dir,
+      '-m', m.model, '-c', `model_reasoning_effort="${m.effort}"`, '-c', 'approval_policy="never"', '-c', `web_search="${web ? 'live' : 'disabled'}"`,
+      // Web search runs through code_mode_host, so a lookup keeps that one on (commands and files stay off).
+      ...CODEX_OFF.filter(f => !(web && f === 'code_mode_host')).flatMap(f => ['--disable', f]), '-']
     const child = spawn(cli, args, { cwd: dir, env, stdio: ['pipe', 'pipe', 'pipe'] })
     let out = '', err = ''
     const end = begin('Waiting for Codex')
@@ -139,15 +140,35 @@ function runCodexModel(prompt: string, m: { model: string; effort: string }, tim
   })
 }
 
-function runCli(prompt: string, model: string, timeoutMs: number): Promise<string> {
-  if (provider === 'codex') return runCodex(prompt, model, timeoutMs)
+/**
+ * Runs the chosen AI. If it fails (an outage, a timeout, a refused model) and the other AI is installed and signed in,
+ * that one answers instead, so one service having a bad hour does not stall a whole auto-apply run.
+ */
+async function runCli(prompt: string, model: string, timeoutMs: number, web = false, swap = false): Promise<string> {
+  const first: AiProvider = swap ? (provider === 'codex' ? 'claude' : 'codex') : provider
+  try { return await (first === 'codex' ? runCodex(prompt, model, timeoutMs, web) : runClaude(prompt, model, timeoutMs, web)) }
+  catch (e) {
+    if (e instanceof StoppedError) throw e
+    const other: AiProvider = first === 'codex' ? 'claude' : 'codex'
+    if (!(other === 'codex' ? findCodex() : findCli())) throw e
+    checkStop()
+    // After a timeout the fallback gets less time, so one question never costs two full waits.
+    const t = /took too long/i.test(String((e as Error)?.message)) ? Math.min(timeoutMs, 120_000) : timeoutMs
+    try { return await (other === 'codex' ? runCodex(prompt, model, t, web) : runClaude(prompt, model, t, web)) }
+    catch (e2) { if (e2 instanceof StoppedError) throw e2; throw e }
+  }
+}
+
+function runClaude(prompt: string, model: string, timeoutMs: number, web = false): Promise<string> {
   const cli = findCli()
   if (!cli) return Promise.reject(new Error('Claude Code was not found on this Mac. Install it and sign in, then try again.'))
   return new Promise((resolve, reject) => {
     const env = { ...process.env }
     delete env.ANTHROPIC_API_KEY   // always use the signed-in Claude account
     delete env.ELECTRON_RUN_AS_NODE
-    const child = spawn(cli, ['-p', '--output-format', 'json', '--model', model, '--tools', '',
+    // web: the only tools allowed are web search and reading web pages (finding a posting on the employer's site);
+    // nothing can run commands or touch files.
+    const child = spawn(cli, ['-p', '--output-format', 'json', '--model', model, '--tools', web ? 'WebSearch,WebFetch' : '', ...(web ? ['--allowedTools', 'WebSearch', 'WebFetch'] : []),
       '--strict-mcp-config', '--no-session-persistence', '--system-prompt', SYSTEM],
       { cwd: tmpdir(), env, stdio: ['pipe', 'pipe', 'pipe'] })
     let out = '', err = ''
@@ -193,14 +214,17 @@ export function extractJson(text: string): unknown {
   throw new Error('no complete JSON found')
 }
 
-export async function askJson<T>(prompt: string, opts: { model?: string; timeoutMs?: number } = {}): Promise<T> {
+/** The AI not chosen in Settings is installed too (for a second opinion). */
+export const otherAiFound = (): boolean => !!(provider === 'codex' ? findCli() : findCodex())
+
+export async function askJson<T>(prompt: string, opts: { model?: string; timeoutMs?: number; web?: boolean; other?: boolean } = {}): Promise<T> {
   const model = opts.model || 'sonnet'
   const timeoutMs = opts.timeoutMs ?? 240_000
   let lastErr: unknown
   for (let attempt = 0; attempt < 2; attempt++) {
     checkStop()
     usage.calls++; onUsage({ ...usage })
-    const text = await runCli(attempt === 0 ? prompt : prompt + '\n\nYour last reply was not valid JSON. Reply with valid JSON only.', model, timeoutMs)
+    const text = await runCli(attempt === 0 ? prompt : prompt + '\n\nYour last reply was not valid JSON. Reply with valid JSON only.', model, timeoutMs, !!opts.web, !!opts.other)
     try { return extractJson(text) as T } catch (e) { lastErr = e }
     checkStop()
   }

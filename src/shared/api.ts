@@ -1,4 +1,4 @@
-import type { Job, JobStatus, PrefillResult, Profile, RefreshProgress, RefreshResult, Resume, Settings, Tailored, Board, Coverage, Usage, WorkdayLogin, Activity, AutoApplyResult, DocFile, DocKind, LiveRun } from './types'
+import type { Job, JobStatus, PrefillResult, Profile, RefreshProgress, RefreshResult, Resume, SavedAnswer, Settings, Tailored, Board, Coverage, Usage, WorkdayLogin, Activity, AutoApplyResult, DocFile, DocKind, LiveRun } from './types'
 
 export interface AppState {
   resume: Resume; hasResume: boolean; profile: Profile; settings: Settings
@@ -40,6 +40,7 @@ export interface Api {
   openExternal(url: string): Promise<void>
   autoApply(jobIds: string[]): Promise<{ applied: number; flagged: number; left: number }>
   clearAutoApplyFlag(jobId: string): Promise<void>
+  saveAnswers(jobId: string, answers: SavedAnswer[]): Promise<void>   // keeps answers for every later form and clears the job's flag
   clearAllAutoApplyFlags(): Promise<void>
   showAutoApplyShot(jobId: string): Promise<void>
   onAutoApply(fn: (r: AutoApplyResult) => void): () => void
@@ -54,4 +55,4 @@ export interface Api {
 }
 
 export const CHANNELS = ['getState', 'importResume', 'chooseResumePdf', 'addDocuments', 'setDocumentKind', 'removeDocument', 'revealDocument', 'revealResumePdf', 'saveResume', 'saveProfile', 'saveSettings', 'listJobs', 'getJob', 'updateJob', 'refresh',
-  'score', 'rescore', 'setWorkdayLogin', 'clearWorkdayLogin', 'connectGmail', 'disconnectGmail', 'addJob', 'tailor', 'saveTailored', 'revealPdf', 'prefill', 'fillAgain', 'openExternal', 'getActivity', 'stopAll', 'autoApply', 'clearAutoApplyFlag', 'clearAllAutoApplyFlags', 'getLiveRun', 'showAutoApplyShot'] as const
+  'score', 'rescore', 'setWorkdayLogin', 'clearWorkdayLogin', 'connectGmail', 'disconnectGmail', 'addJob', 'tailor', 'saveTailored', 'revealPdf', 'prefill', 'fillAgain', 'openExternal', 'getActivity', 'stopAll', 'autoApply', 'clearAutoApplyFlag', 'saveAnswers', 'clearAllAutoApplyFlags', 'getLiveRun', 'showAutoApplyShot'] as const

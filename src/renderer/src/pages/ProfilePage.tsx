@@ -1,7 +1,7 @@
 import { ai } from '../ai'
 import { useState } from 'react'
 import type { AppState } from '../../../shared/api'
-import type { DocKind, Profile } from '../../../shared/types'
+import type { DocKind, Profile, SavedAnswer } from '../../../shared/types'
 import { DOC_KIND_LABEL } from '../../../shared/types'
 import type { Toast } from '../App'
 
@@ -10,12 +10,18 @@ const YESNO = ['', 'Yes', 'No']
 export function ProfilePage({ state, reload, notify }: { state: AppState; reload: () => Promise<void>; notify: Toast }) {
   const [p, setP] = useState<Profile>(state.profile)
   const [dirty, setDirty] = useState(false)
-  type TextKey = Exclude<keyof Profile, 'moreProjects'>
+  type TextKey = Exclude<keyof Profile, 'moreProjects' | 'answers'>
   type Project = Profile['moreProjects'][number]
   const set = (k: TextKey, v: string): void => { setP({ ...p, [k]: v }); setDirty(true) }
   const projects = p.moreProjects || []
   const setProjects = (list: Project[]): void => { setP({ ...p, moreProjects: list }); setDirty(true) }
   const editProject = (i: number, patch: Partial<Project>): void => setProjects(projects.map((x, n) => (n === i ? { ...x, ...patch } : x)))
+  const answers = p.answers || []
+  const setAnswers = (list: SavedAnswer[]): void => { setP({ ...p, answers: list }); setDirty(true) }
+  const editAnswer = (i: number, patch: Partial<SavedAnswer>): void => setAnswers(answers.map((x, n) => (n === i ? { ...x, ...patch } : x)))
+  const EEO = (k: TextKey, label: string, placeholder: string) => (
+    <label className="f"><span>{label}</span><input value={(p[k] as string | undefined) ?? ''} placeholder={placeholder} onChange={e => set(k, e.target.value)} /></label>
+  )
   const T = (k: TextKey, label: string, placeholder = '') => (
     <label className="f"><span>{label}</span><input value={(p[k] as string | undefined) ?? ''} placeholder={placeholder} onChange={e => set(k, e.target.value)} /></label>
   )
@@ -26,7 +32,8 @@ export function ProfilePage({ state, reload, notify }: { state: AppState; reload
   )
   const save = async (): Promise<void> => {
     const clean = projects.map(x => ({ ...x, name: x.name.trim(), bullets: x.bullets.map(b => b.trim()).filter(Boolean) })).filter(x => x.name || x.bullets.length)
-    await window.api.saveProfile({ ...p, moreProjects: clean }); setP({ ...p, moreProjects: clean }); setDirty(false); await reload(); notify('Profile saved.') }
+    const saved = answers.map(x => ({ ...x, q: x.q.trim(), a: x.a.trim() })).filter(x => x.q && x.a)
+    await window.api.saveProfile({ ...p, moreProjects: clean, answers: saved }); setP({ ...p, moreProjects: clean, answers: saved }); setDirty(false); await reload(); notify('Profile saved.') }
 
   return (
     <div className="page narrow">
@@ -57,6 +64,26 @@ export function ProfilePage({ state, reload, notify }: { state: AppState; reload
       <div className="card"><h3>Other facts {ai()} may use</h3>
         <label className="f"><span>Used for cover letters and screening questions. Write only things that are true: why mechanical engineering, industries you like, clubs, anything not on the resume.</span>
           <textarea rows={5} value={p.extra} onChange={e => set('extra', e.target.value)} /></label>
+      </div>
+      <div className="card"><h3>Voluntary self-identification</h3>
+        <p className="muted" style={{ marginBottom: 10 }}>US employers ask these on almost every form. Leave a box empty to decline to answer wherever the form allows it. If a form insists (no "decline" choice), auto-apply only answers what you put here, and otherwise stops and asks you.</p>
+        <div className="grid3">{EEO('eeoGender', 'Gender', 'Decline to answer')}{EEO('eeoHispanic', 'Hispanic or Latino', 'Decline to answer')}{EEO('eeoRace', 'Race / ethnicity', 'Decline to answer')}</div>
+        <div className="grid2" style={{ marginTop: 12 }}>{EEO('eeoVeteran', 'Veteran status', 'Decline to answer')}{EEO('eeoDisability', 'Disability', 'Decline to answer')}</div>
+      </div>
+      <div className="card"><h3>Saved answers</h3>
+        <p className="muted" style={{ marginBottom: 10 }}>Your own answers to application questions. {ai()} works out most questions from your profile and resume; when it cannot, auto-apply flags the job and asks you on the Status page, and what you type there is kept here. Every later form that asks the same thing (in any wording) gets this answer.</p>
+        <div className="stack">
+          {answers.map((x, i) => (
+            <div key={i} className="grid2" style={{ alignItems: 'end' }}>
+              <label className="f"><span>Question</span><input value={x.q} onChange={e => editAnswer(i, { q: e.target.value })} /></label>
+              <div className="rowx" style={{ flexWrap: 'nowrap' }}>
+                <label className="f" style={{ flex: 1 }}><span>Answer</span><input value={x.a} onChange={e => editAnswer(i, { a: e.target.value })} /></label>
+                <button className="btn ghost sm" onClick={() => setAnswers(answers.filter((_, n) => n !== i))}>Remove</button>
+              </div>
+            </div>
+          ))}
+          <div><button className="btn" onClick={() => setAnswers([...answers, { q: '', a: '' }])}>Add an answer</button></div>
+        </div>
       </div>
       <div className="card"><h3>More projects</h3>
         <p className="muted" style={{ marginBottom: 10 }}>Projects that are not on your resume. When you tailor a resume, {ai()} looks at these together with the resume's own projects and keeps the ones that fit the posting best, so the resume stays one page. Write them the way you would on a resume. Mark bold with **two asterisks**.</p>

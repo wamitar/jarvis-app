@@ -95,10 +95,18 @@ async function token(): Promise<string> {
 }
 
 async function api<T>(path: string): Promise<T> {
-  const r = await fetch(API + path, { headers: { authorization: `Bearer ${await token()}` }, signal: AbortSignal.timeout(20_000) })
-  if (r.status === 401) { access = null; throw new Error('Gmail turned the sign-in down. Connect Gmail again in Settings.') }
-  if (!r.ok) throw new Error(`${r.status} from Gmail`)
-  return r.json() as Promise<T>
+  for (let attempt = 0; ; attempt++) {
+    const r = await fetch(API + path, { headers: { authorization: `Bearer ${await token()}` }, signal: AbortSignal.timeout(20_000) })
+    if (r.status === 401) { access = null; throw new Error('Gmail turned the sign-in down. Connect Gmail again in Settings.') }
+    // Gmail limits how fast one account is read (403 "rate limit exceeded" or 429): wait and try again.
+    if ((r.status === 429 || r.status === 403) && attempt < 4) {
+      const body = await r.text().catch(() => '')
+      if (r.status === 429 || /rate ?limit|quota|userRateLimitExceeded/i.test(body)) { await new Promise(res => setTimeout(res, 2000 * 2 ** attempt)); continue }
+      throw new Error(`403 from Gmail: ${body.slice(0, 120)}`)
+    }
+    if (!r.ok) throw new Error(`${r.status} from Gmail`)
+    return r.json() as Promise<T>
+  }
 }
 
 interface Part { mimeType?: string; body?: { data?: string }; parts?: Part[]; headers?: { name: string; value: string }[] }
@@ -136,45 +144,61 @@ export interface Verification { code?: string; link?: string; from: string; subj
 const SITE_SENDER = /workday|myworkday|oracle|taleo|successfactors|sapsf|sap\.com|icims|greenhouse|lever|ashby|smartrecruiters|ultipro|ukg|bamboohr|workable|jobvite|eightfold|avature|phenom|no-?reply|donotreply|careers|talent|recruit/i
 const VERIFY_WORDS = /verif|confirm|activate|one-time|passcode|security code|access code|sign[- ]in code|login code|your code|pin\b/i
 const LINK_WORDS = /verif|confirm|activat|validate|token=|code=/i
+const RESET_WORDS = /reset|forgot|new password|change (your )?password/i
+const RESET_LINK = /passwordreset|reset[-_]?password|resetpassword|password[-_]?reset|\/reset\//i
 
 /** Pulls a code (4 to 8 digits, or a short letter-digit code) and a verification link out of one email. */
-export function extract(subject: string, text: string, links: string[]): { code?: string; link?: string } {
+export function extract(subject: string, text: string, links: string[], kind: 'verify' | 'reset' = 'verify'): { code?: string; link?: string } {
   const all = `${subject}\n${text}`
+  if (kind === 'reset') return { link: links.find(l => RESET_LINK.test(l) && !/unsubscribe|privacy|terms|preferences/i.test(l)) }
   // A code is a short token right after words like "code", "passcode" or "PIN", or alone on its own line.
   // Every candidate is tried, since the word after "code" is often ordinary text ("Your one-time passcode\nYour ...").
   const near = [...all.matchAll(/(?:code|passcode|pin|one-time password|otp)\s*(?:is|:|-)?\s*[:\s]\s*([A-Z0-9]{4,8})\b/gi)].map(m => m[1]).find(c => /\d/.test(c))
-  const code = near || all.match(/^\s*(\d{4,8})\s*$/m)?.[1]
-  const link = links.find(l => LINK_WORDS.test(l) && !/unsubscribe|privacy|terms|preferences/i.test(l))
+  // Or after a sentence about the code that ends in a colon (Greenhouse: "paste this code into the security code field
+  // on your application: 01877316"; its HTML-only email loses the line break before the code).
+  const after = [...all.matchAll(/(?:code|passcode)\b[^.:\n]{0,80}:\s*([A-Z0-9]{4,10})\b/gi)].map(m => m[1]).find(c => /\d/.test(c))
+  const code = near || after || all.match(/^\s*(\d{4,8})\s*$/m)?.[1]
+  const link = links.find(l => LINK_WORDS.test(l) && !RESET_LINK.test(l) && !/unsubscribe|privacy|terms|preferences/i.test(l))
   return { code, link }
 }
 
 /**
- * The newest verification email received after `since` (ms), optionally from a sender or about a company matching
- * `hint` (e.g. the Workday tenant "jabil"). Waits up to `waitMs`, checking every 5 seconds, since mail takes a moment.
+ * The newest verification email (kind 'verify': a code or a confirm link) or password-reset email (kind 'reset': the
+ * reset link) received after `since` (ms), from a sender or about a company matching `hint` (e.g. the Workday tenant
+ * "jabil"). Waits up to `waitMs`, checking every 5 seconds, since mail takes a moment.
  */
-export async function findVerification(opts: { since: number; hint?: string; waitMs?: number }): Promise<Verification | null> {
+export async function findVerification(opts: { since: number; hint?: string; waitMs?: number; kind?: 'verify' | 'reset' }): Promise<Verification | null> {
   if (!connected()) return null
+  const kind = opts.kind || 'verify'
   const end = Date.now() + (opts.waitMs ?? 90_000)
   const after = Math.floor((opts.since - 60_000) / 1000)   // a minute of slack for clock differences
   const hint = (opts.hint || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+  // Searched narrowly: a busy inbox (application receipts, job alerts) otherwise pushes the one email wanted out of the first page.
+  const words = kind === 'reset' ? '(reset OR password OR forgot)' : '(verify OR verification OR confirm OR activate OR code OR passcode OR "one-time")'
+  const q = `after:${after} -in:chats ${words}`
+  const seen = new Set<string>()
   for (;;) {
-    const list = await api<{ messages?: { id: string }[] }>(`/messages?maxResults=15&q=${encodeURIComponent(`after:${after} -in:chats`)}`)
+    const list = await api<{ messages?: { id: string }[] }>(`/messages?includeSpamTrash=true&maxResults=40&q=${encodeURIComponent(q)}`)
     const found: Verification[] = []
     for (const { id } of list.messages || []) {
+      if (seen.has(id)) continue
       const m = await api<Msg>(`/messages/${id}?format=full`)
       const at = Number(m.internalDate)
-      if (at < opts.since - 60_000) continue
+      if (at < opts.since - 60_000) { seen.add(id); continue }
       const from = header(m, 'from'), subject = header(m, 'subject')
       const parts = { text: [] as string[], html: [] as string[] }
       bodies(m.payload, parts)
       const text = parts.text.join('\n') || stripHtml(parts.html.join('\n'))
-      if (!SITE_SENDER.test(from) && !VERIFY_WORDS.test(subject)) continue
-      if (!VERIFY_WORDS.test(`${subject} ${text.slice(0, 3000)}`)) continue
-      if (hint && !`${from} ${subject} ${text.slice(0, 2000)}`.toLowerCase().replace(/[^a-z0-9]/g, '').includes(hint)) continue
+      const marker = kind === 'reset' ? RESET_WORDS : VERIFY_WORDS
+      // Not a job site's account email: never looked at again in this search.
+      if ((!SITE_SENDER.test(from) && !marker.test(subject)) || !marker.test(`${subject} ${text.slice(0, 3000)}`)) { seen.add(id); continue }
+      if (kind === 'verify' && RESET_WORDS.test(subject)) { seen.add(id); continue }
+      if (hint && !`${from} ${subject} ${text.slice(0, 4000)}`.toLowerCase().replace(/[^a-z0-9]/g, '').includes(hint)) { seen.add(id); continue }
       const links = [...parts.html.join('\n').matchAll(/href="(https:\/\/[^"]+)"/gi)].map(x => x[1].replace(/&amp;/g, '&'))
         .concat([...text.matchAll(/https:\/\/\S+/g)].map(x => x[0].replace(/[).,>]+$/, '')))
-      const got = extract(subject, text, links)
+      const got = extract(subject, text, links, kind)
       if (got.code || got.link) found.push({ ...got, from, subject, at })
+      else seen.add(id)
     }
     if (found.length) return found.sort((a, b) => b.at - a.at)[0]
     if (Date.now() >= end) return null
