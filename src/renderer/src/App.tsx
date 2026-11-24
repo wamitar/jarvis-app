@@ -1,7 +1,7 @@
 import { ai, setAi } from './ai'
 import { useCallback, useEffect, useState } from 'react'
 import type { AppState } from '../../shared/api'
-import type { Activity, Job, RefreshProgress, Usage } from '../../shared/types'
+import type { Activity, Job, LiveRun, RefreshProgress, Usage } from '../../shared/types'
 import { JobsPage } from './pages/Jobs'
 import { TrackerPage } from './pages/Tracker'
 import { StatusPage } from './pages/StatusPage'
@@ -25,6 +25,8 @@ export function App() {
   const [toast, setToast] = useState<{ msg: string; err: boolean } | null>(null)
   const [usage, setUsage] = useState<Usage>({ calls: 0, input: 0, output: 0 })
   const [activity, setActivity] = useState<Activity>({ working: false, stopping: false, tasks: [] })
+  const [run, setRun] = useState<LiveRun | null>(null)
+  const [skipping, setSkipping] = useState('')
 
   const reload = useCallback(async () => {
     const [s, j] = await Promise.all([window.api.getState(), window.api.listJobs()])
@@ -36,7 +38,9 @@ export function App() {
     reload().then(async () => { const s = await window.api.getState(); if (!s.hasResume) setPage('resume') })
     const a = window.api.onProgress(setProgress), b = window.api.onUsage(setUsage), c = window.api.onActivity(setActivity)
     window.api.getActivity().then(setActivity)
-    return () => { a(); b(); c() }
+    window.api.getLiveRun().then(setRun)
+    const d = window.api.onLiveRun(setRun)
+    return () => { a(); b(); c(); d() }
   }, [reload])
 
   const stop = async (): Promise<void> => {
@@ -50,6 +54,12 @@ export function App() {
   const main = activity.tasks.filter(t => !/^Waiting for (Claude|Codex)$/.test(t))
   const task = main[main.length - 1] || activity.tasks[0] || ''
   const withClaude = activity.tasks.some(t => /^Waiting for (Claude|Codex)$/.test(t)) && !/^Waiting for (Claude|Codex)$/.test(task)
+  // Two lights that are always shown: auto-apply and the applications you fill yourself. Anything else (fetching, tailoring) is listed under them.
+  const MANUAL = /^Filling an application$|^Watching the application/
+  const autoJob = run?.running ? run.jobs.find(j => j.state === 'tailoring' || j.state === 'working') : undefined
+  const manualTask = main.filter(t => MANUAL.test(t)).pop()
+  const otherTask = main.filter(t => !MANUAL.test(t) && !/^Auto-appl/.test(t)).pop()
+  const waiting = withClaude ? ` (waiting for ${ai()})` : ''
   const active = jobs.filter(j => j.status !== 'hidden')
   const tracked = jobs.filter(j => ['applied', 'interview', 'offer', 'rejected'].includes(j.status)).length
   const openJob = (id: string): void => { setSelected(id); setPage('jobs') }
@@ -65,11 +75,19 @@ export function App() {
           ))}
         </nav>
         <div className="foot">
-          <div className={'status' + (activity.working ? ' on' : '')} role="status">
-            <div className="state"><span className="lamp" />{activity.stopping ? 'Stopping…' : activity.working ? 'Working' : 'Idle'}</div>
-            {activity.working && <div className="what">{task}{withClaude ? ` (waiting for ${ai()})` : ''}</div>}
-            {activity.working && <button className="kill" onClick={stop} disabled={activity.stopping} title="Ends AI calls, form filling, the application watcher and job fetching. The application browser is left open.">Stop everything</button>}
+          <div className={'status' + (run?.running ? ' on' : '')} role="status">
+            <div className="label">Auto-apply</div>
+            <div className="state"><span className="lamp" />{run?.running ? (autoJob?.state === 'tailoring' ? 'Tailoring' : 'Applying') : 'Idle'}
+              {autoJob && <button className="skip" disabled={skipping === autoJob.jobId} onClick={() => { setSkipping(autoJob.jobId); window.api.skipAutoApply(autoJob.jobId).catch(() => setSkipping('')) }} title="Give up on this job and go on to the next one">Skip</button>}</div>
+            {autoJob && <div className="what">{autoJob.company} · {autoJob.title}</div>}
           </div>
+          <div className={'status' + (manualTask ? ' on' : '')} role="status">
+            <div className="label">Manual applications</div>
+            <div className="state"><span className="lamp" />{manualTask ? 'Working' : 'Idle'}</div>
+            {manualTask && <div className="what">{manualTask}{task === manualTask ? waiting : ''}</div>}
+          </div>
+          {otherTask && <div className="what">Also: {otherTask}{task === otherTask ? waiting : ''}</div>}
+          {activity.working && <button className="kill" onClick={stop} disabled={activity.stopping} title="Ends AI calls, form filling, the application watcher and job fetching. The application browser is left open.">{activity.stopping ? 'Stopping…' : 'Stop everything'}</button>}
           <div><span className={'dot' + (state.cliFound ? '' : ' off')} />{state.settings.aiProvider === 'codex' ? (state.cliFound ? 'Codex (ChatGPT) connected' : 'Codex not found') : (state.cliFound ? 'Claude account connected' : 'Claude Code not found')}</div>
           <div className="usage" title="Totals since you started using the app. Input includes the instructions and resume sent with every call.">
             <div className="num"><b>{fmt(usage.input + usage.output)}</b> tokens used</div>
