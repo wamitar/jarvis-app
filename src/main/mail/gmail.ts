@@ -138,6 +138,28 @@ export async function searchMessages(q: string, max = 20): Promise<MailItem[]> {
   return out
 }
 
+/** Ids of every email matching a Gmail search (spam and trash left out), newest first, following the pages up to `cap`. Read-only. */
+export async function searchAllIds(q: string, cap = 3000): Promise<string[]> {
+  if (!connected()) return []
+  const ids: string[] = []
+  let page = ''
+  do {
+    const list = await api<{ messages?: { id: string }[]; nextPageToken?: string }>(`/messages?maxResults=500&includeSpamTrash=false&q=${encodeURIComponent(q)}${page ? `&pageToken=${encodeURIComponent(page)}` : ''}`)
+    for (const { id } of list.messages || []) ids.push(id)
+    page = list.nextPageToken || ''
+  } while (page && ids.length < cap)
+  return ids.slice(0, cap)
+}
+
+/** One email in full; `text` is the plain-text part, or the HTML part with tags removed when there is none. Read-only. */
+export async function getMessage(id: string): Promise<MailItem> {
+  const m = await api<Msg>(`/messages/${id}?format=full`)
+  const parts = { text: [] as string[], html: [] as string[] }
+  bodies(m.payload, parts)
+  const html = parts.html.join('\n')
+  return { id, from: header(m, 'from'), subject: header(m, 'subject'), text: parts.text.join('\n').trim() || stripHtml(html).trim(), html, at: Number(m.internalDate) }
+}
+
 export interface Verification { code?: string; link?: string; from: string; subject: string; at: number }
 
 // Senders and words that mark a job site's verification email.

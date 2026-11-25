@@ -100,5 +100,24 @@ check('no year taken as code', extract('Verify your email', 'Welcome to the 2027
   srv.close()
 }
 
+// Large-employer judgement and title abbreviations (offline: the AI verdict is injected, never asked).
+{
+  const { checkJob, usAllowed, setAiLarge } = await import('../src/main/filter.ts')
+  const { isBigEmployer } = await import('../src/main/sources/simplify.ts')
+  const job = (company: string, title: string, location: string, big = false) => ({ id: 'x', company, title, location, url: '', big, source: 'linkedin', posted: '' }) as never
+  check('title: "Mech Eng" abbreviation kept in Ontario', checkJob(job('Some Ontario Co', 'Intern Bachelors Mech Eng', 'Waterloo, ON')).keep, true)
+  check('title: "Mech. Eng" kept', checkJob(job('Some Ontario Co', 'Mech. Eng Co-op', 'Toronto, ON')).keep, true)
+  check('title: "MechE" kept', checkJob(job('Some Ontario Co', 'MechE Intern', 'Toronto, ON')).keep, true)
+  check('title: software intern still dropped', checkJob(job('Some Ontario Co', 'Software Engineering Intern', 'Toronto, ON')).keep, false)
+  setAiLarge([])
+  check('ai-large: unknown US company outside key areas not allowed', usAllowed('Zed Dynamics', 'Columbus, OH'), false)
+  check('ai-large: not big before the verdict', isBigEmployer('Zed Dynamics'), false)
+  setAiLarge(['Zed Dynamics'])
+  check('ai-large: allowed once judged large', usAllowed('Zed Dynamics', 'Columbus, OH'), true)
+  check('ai-large: counts as a big employer', isBigEmployer('Zed Dynamics'), true)
+  check('ai-large: its US mechanical internship passes the filter', checkJob(job('Zed Dynamics', 'Mechanical Engineering Intern', 'Columbus, OH')).keep, true)
+  setAiLarge([])
+}
+
 console.log(bad ? `${bad} FAILED` : 'all passed')
 process.exit(bad ? 1 : 0)

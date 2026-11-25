@@ -224,6 +224,8 @@ function collectFields(startIdx: number): Field[] {
     // The question and the choices listed under it; or, with no "?", the text right above the field.
     return (qi >= 0 ? kept.slice(qi) : kept.slice(-3)).join(' • ').slice(0, 600)
   }
+  const nowD = new Date()
+  const localToday = `${nowD.getFullYear()}-${String(nowD.getMonth() + 1).padStart(2, '0')}-${String(nowD.getDate()).padStart(2, '0')}`
   let idx = startIdx
   const push = (f: Omit<Field, 'idx'>, els: Element[]): void => {
     const e0 = els[0]
@@ -308,22 +310,39 @@ function collectFields(startIdx: number): Field[] {
         required: l.star || parts.some(x => x.getAttribute('aria-required') === 'true'), value: vals.every(Boolean) ? vals.join('/') : '', options: [], maxLength: 0, multi: false }, [el])
       continue
     }
+    // select2 dropdowns (Amazon.jobs): the page's own list is a hidden native <select> kept in sync by the widget; choosing in it updates the widget.
+    if (el.tagName === 'SELECT' && el.classList.contains('select2-hidden-accessible') && !(el as HTMLSelectElement).multiple && visible(el)) {
+      const s = el as HTMLSelectElement
+      const q = el.closest('.question, .form-group')
+      const ql = q?.querySelector('.question-label label, label.text-tooltip-label')
+      const opts = Array.from(s.options).map(o => o.text.trim()).filter(Boolean)
+      const cur = s.selectedIndex >= 0 && s.value !== '' ? s.options[s.selectedIndex].text.trim() : ''
+      push({ kind: 'select', inputType: 'select', label: clean(ql?.textContent) || labelFor(el).text, question: '', section, name: el.id || '',
+        required: !!q?.querySelector('.question-label.required') || s.required, value: cur, options: opts, maxLength: 0, multi: false }, [el])
+      continue
+    }
     // A read-only box that opens a list (Oracle's select-style dropdowns: an empty box with a caret) is still a dropdown.
     const pickerOnly = input.readOnly && (el.getAttribute('role') === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox')
     if (!visible(el) || (input.readOnly && !pickerOnly)) { skip('invisible/readonly', el); continue }
     // Hidden stand-ins some forms keep beside custom dropdowns for their own validation (Greenhouse, react-select).
     if (el.getAttribute('aria-hidden') === 'true' || Number(getComputedStyle(el).opacity) === 0 || (el.tabIndex < 0 && !['combobox', 'spinbutton'].includes(el.getAttribute('role') || ''))) { skip('aria-hidden/opacity/tabindex', el); continue }
-    const l = labelFor(el)
+    // select2 multi-selects (Amazon.jobs): the search box sits in a <label> wrapping the whole list, so ask the question's own label.
+    const sq = el.classList.contains('select2-search__field') ? el.closest('.question, .form-group')?.querySelector('.question-label label') : null
+    const l = sq && clean(sq.textContent) ? { text: clean(sq.textContent), star: !!el.closest('.question, .form-group')?.querySelector('.question-label.required') } : labelFor(el)
     const name = `${el.getAttribute('name') || ''} ${el.getAttribute('id') || ''} ${el.getAttribute('autocomplete') || ''} ${el.getAttribute('data-automation-id') || ''}`.trim()
     // Oracle Cloud marks some required rows (a month/year "Start Date *") only by its label's class.
     const required = input.required || el.getAttribute('aria-required') === 'true' || l.star || !!el.closest('.input-row')?.querySelector(':scope > form-element-label label.input-row__label--required, :scope > label.input-row__label--required')
-    const isCombo = el.getAttribute('role') === 'combobox' || !!el.getAttribute('aria-autocomplete') || el.getAttribute('data-uxi-widget-type') === 'selectinput'
+    // (Greenhouse's education pickers are Selectize boxes: a plain <input> inside .selectize-control.)
+    const isCombo = el.getAttribute('role') === 'combobox' || !!el.getAttribute('aria-autocomplete') || !!el.closest('.selectize-control') || el.getAttribute('data-uxi-widget-type') === 'selectinput'
     // A date box that opens a calendar (react-datepicker and similar, e.g. Eightfold): typed like a date.
     if (el.tagName === 'INPUT' && el.getAttribute('aria-haspopup') === 'dialog' && (/date/i.test(`${l.text} ${el.getAttribute('placeholder') || ''} ${el.getAttribute('aria-label') || ''} ${name}`))) {
       const ph = el.getAttribute('placeholder') || ''
-      const fmt = /^(dd|DD)[/.-]/.test(ph) ? 'DD/MM/YYYY' : /^(yyyy|YYYY)-/.test(ph) ? 'YYYY-MM-DD' : 'MM/DD/YYYY'
+      // The placeholder spells the format when it is made only of YYYY / MM / DD ("YYYY-MM" on Amazon.jobs' graduation date).
+      const fmt = /^(yyyy|mm|dd)([/.-](yyyy|mm|dd)){1,2}$/i.test(ph) ? ph.toUpperCase() : /^(dd|DD)[/.-]/.test(ph) ? 'DD/MM/YYYY' : /^(yyyy|YYYY)-/.test(ph) ? 'YYYY-MM-DD' : 'MM/DD/YYYY'
       push({ kind: 'wddate', inputType: 'date ' + fmt, label: l.text || 'Date', question: '', section, name: 'pickdate ' + name, required,
-        value: input.value || '', options: [], maxLength: 0, multi: false }, [el])
+        // A box that holds today's date is the picker's default (Amazon.jobs), not an answer.
+        // (Not one the app filled itself, nor a signature / today / self-identification date, where today is the answer.)
+        value: input.value === localToday && !input.getAttribute('data-ih-filled') && !/signature|\bsign\b|today|self.?id|certif/i.test(`${l.text} ${name}`) ? '' : input.value || '', options: [], maxLength: 0, multi: false }, [el])
       continue
     }
     if (isCombo && el.tagName === 'INPUT') {
@@ -333,7 +352,7 @@ function collectFields(startIdx: number): Field[] {
       for (let i = 0; i < 8 && p && !shown; i++, p = p.parentElement) {
         if (p.querySelectorAll('input:not([type=hidden]), textarea, select').length > 1) break   // reached another field
         // (Oracle Cloud's multi-select keeps its choices as pills, cx-multi-select-pill__value-text.)
-        const picked = Array.from(p.querySelectorAll('[data-automation-id="selectedItem"], [class*="singleValue" i], [class*="multiValue" i], [class*="single-value" i], .cx-multi-select-pill__value-text')).map(x => clean(x.textContent)).filter(Boolean)
+        const picked = Array.from(p.querySelectorAll('[data-automation-id="selectedItem"], [class*="singleValue" i], [class*="multiValue" i], [class*="single-value" i], .selectize-input > .item, .cx-multi-select-pill__value-text, .select2-selection__choice')).map(x => clean(x.textContent).replace(/^×\s*/, '')).filter(Boolean)
         if (picked.length) shown = picked.join('; ')
       }
       // Other pickers (SuccessFactors) keep the chosen text in the box itself; its placeholder entry counts as empty.
@@ -356,7 +375,10 @@ function collectFields(startIdx: number): Field[] {
     let grp = el.closest('fieldset, [role="group"]') as HTMLElement | null
     if (grp && grp.querySelectorAll('input, select, textarea').length > 3) grp = null
     const gq = grp ? ((grp.tagName === 'FIELDSET' && clean(grp.querySelector('legend')?.textContent)) || ownLabel(grp).text) : ''
-    push({ kind: el.tagName === 'TEXTAREA' ? 'textarea' : 'text', inputType: type, label: l.text,
+    // Greenhouse's "Start date" is two boxes with one label: the placeholder (MM / YYYY) tells month from year.
+    const ph = el.getAttribute('placeholder') || ''
+    const lt = type === 'number' && /^(MM|YYYY)$/i.test(ph) && !l.text.includes(ph) ? `${l.text} (${ph.toUpperCase() === 'MM' ? 'month, MM' : 'year, YYYY'})` : l.text
+    push({ kind: el.tagName === 'TEXTAREA' ? 'textarea' : 'text', inputType: type, label: lt,
       question: gq && gq !== l.text && gq.length < 200 ? gq : '', section, name, required,
       value: input.value || '', options: [], maxLength: input.maxLength > 0 ? input.maxLength : 0, multi: false }, [el])
   }
@@ -417,11 +439,41 @@ function collectFields(startIdx: number): Field[] {
     push({ kind: 'dropdown', inputType: 'dropdown', label: l.text, question: '', section: sectionOf(el), name: el.getAttribute('id') || '',
       required: el.getAttribute('aria-required') === 'true' || l.star, value: /^select one$|^select$|^choose/i.test(cur) ? '' : cur, options: [], maxLength: 0, multi: false }, [el])
   }
+  // "Select all that apply" chip groups (Eightfold's Suggested skills): a row of tags, each a short text plus an icon-only
+  // "+" button. Read as one multi-choice question whose options are the chip texts.
+  const REMOVE_CHIP = /^(remove|delete|clear|close)\b/i
+  const chipBtns = Array.from(document.querySelectorAll<HTMLElement>('button')).filter(b => {
+    const p = b.parentElement
+    const tag = `${b.getAttribute('aria-label') || ''} ${b.getAttribute('title') || ''}`
+    if (REMOVE_CHIP.test(b.getAttribute('aria-label') || '')) return false
+    // Eightfold's buttons are aria-label="Add suggested skill X"; edit / download / menu icon buttons are not chips.
+    if (/^\s*(edit|download|view|preview|share|info|help|copy|expand|collapse|toggle|open|upload|more|menu)\b/i.test(tag) || !/add|select|plus|choose/i.test(tag)) return false
+    if (!p || !visible(b) || (b as HTMLButtonElement).disabled || clean(b.textContent) || !b.querySelector('svg, img, i')) return false
+    if (b.closest('header, nav, [role="dialog"], [role="search"]') || p.querySelectorAll('button').length !== 1) return false
+    const t = clean(p.textContent); return t.length > 0 && t.length <= 60
+  })
+  const chipRows = new Map<Element, HTMLElement[]>()
+  for (const b of chipBtns) { const row = b.parentElement!.parentElement; if (row) chipRows.set(row, [...(chipRows.get(row) || []), b]) }
+  for (const [row, btns] of chipRows) {
+    if (btns.length < 3) continue
+    const names = btns.map(b => clean(b.parentElement!.textContent))
+    // The question is the field's own <label>, found by climbing out of the chip row.
+    let lab: HTMLElement | null = null
+    for (let a: HTMLElement | null = row.parentElement, k = 0; a && a !== document.body && k < 8 && !lab; a = a.parentElement, k++) {
+      lab = Array.from(a.querySelectorAll<HTMLElement>('label')).filter(l => (l.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING) && !hasControl(l) && visible(l) && clean(l.textContent).length >= 3).pop() || null
+    }
+    if (!lab) continue
+    // Chips already chosen move out of the list and carry a "Remove" button: they count as this question's answer.
+    const chosen = Array.from((row.parentElement || row).querySelectorAll<HTMLElement>('button')).filter(b => REMOVE_CHIP.test(b.getAttribute('aria-label') || '') && b.parentElement && !b.parentElement.querySelector('input')).map(b => clean(b.parentElement!.textContent)).filter(Boolean)
+    push({ kind: 'checkboxes', inputType: 'chips', label: clean(lab.textContent), question: '', section: sectionOf(row), name: lab.getAttribute('for') || '',
+      required: /[*✱∗]/.test(lab.textContent || '') || reqClass(lab), value: chosen.join('; '), options: names, maxLength: 0, multi: true }, btns)
+  }
   return out
 }
 
 /** Options of an open list. Workday also marks the chips of already-chosen items as options; those are left out. */
-const OPT = '[role="option"]:not([role="listbox"][aria-label*="selected" i] [role="option"]):not([data-automation-id="selectedItem"])'
+// (Oracle Cloud's select lists, e.g. Country, are role="grid" rows of role="gridcell" items; Greenhouse's Selectize lists are .option divs.)
+const OPT = ':is([role="option"], [role="gridcell"].cx-select__list-item, .selectize-dropdown-content .option):not([role="listbox"][aria-label*="selected" i] [role="option"]):not([data-automation-id="selectedItem"])'
 const visibleOptions = async (frame: Frame): Promise<string[]> =>
   frame.evaluate((sel: string) => Array.from(document.querySelectorAll<HTMLElement>(sel))
     .filter(o => { const r = o.getBoundingClientRect(); return r.width > 0 && r.height > 0 })
@@ -448,14 +500,14 @@ async function readOptions(frame: Frame, f: Field): Promise<void> {
     // The list this box opens (aria-controls / aria-owns), so a list left open by another box is never read for it.
     const own = await loc.evaluate((e: Element) => (e.getAttribute('aria-controls') || e.getAttribute('aria-owns') || '').split(/\s+/)[0] || '').catch(() => '')
     const mine = own ? frame.locator(`[id="${own}"]`) : null
-    if (mine) await mine.locator('[role="option"]').first().waitFor({ state: 'visible', timeout: 2000 }).catch(() => {})
-    else await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 1500 }).catch(() => {})
+    if (mine) await mine.locator('[role="option"], [role="gridcell"].cx-select__list-item').first().waitFor({ state: 'visible', timeout: 2000 }).catch(() => {})
+    else await frame.locator(OPT + ':visible').first().waitFor({ state: 'visible', timeout: 1500 }).catch(() => {})
     // Some pickers open their list only on the arrow key or typing, not on a click (Ashby's "Start typing..." boxes).
     if (f.kind === 'combobox' && !(await frame.locator(OPT + ':visible').count().catch(() => 0))) {
       await loc.press('ArrowDown').catch(() => {})
-      await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 1500 }).catch(() => {})
+      await frame.locator(OPT + ':visible').first().waitFor({ state: 'visible', timeout: 1500 }).catch(() => {})
     }
-    const scoped = mine ? await mine.locator('[role="option"]').evaluateAll(els => els.filter(o => { const r = o.getBoundingClientRect(); return r.width > 0 && r.height > 0 })
+    const scoped = mine ? await mine.locator('[role="option"], [role="gridcell"].cx-select__list-item').evaluateAll(els => els.filter(o => { const r = o.getBoundingClientRect(); return r.width > 0 && r.height > 0 })
       .map(o => (o.textContent || '').replace(/\s+/g, ' ').trim()).filter(t => t && !/^(select one|select|choose one|--+)$/i.test(t)).slice(0, 300)).catch(() => [] as string[]) : []
     f.options = scoped.length ? scoped : await visibleOptions(frame)
   } catch { /* leave options empty; Claude still answers from the label */ }
@@ -513,8 +565,8 @@ async function clickOption(frame: Frame, want: string, choose?: Chooser): Promis
   if (i < 0) return null
   // The whole text must match: "Electro-Mechanical Engineering" contains "Mechanical Engineering" too.
   const exact = new RegExp(`^\\s*${opts[i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')}\\s*$`, 'i')
-  let loc = frame.locator(OPT).filter({ hasText: exact })
-  if (!(await loc.count().catch(() => 0))) loc = frame.locator(OPT).filter({ hasText: opts[i] })
+  let loc = frame.locator(OPT + ':visible').filter({ hasText: exact })
+  if (!(await loc.count().catch(() => 0))) loc = frame.locator(OPT + ':visible').filter({ hasText: opts[i] })
   const n = await loc.count()
   for (let k = 0; k < n; k++) {
     const o = loc.nth(k)
@@ -556,10 +608,10 @@ async function pickInCombobox(frame: Frame, loc: Locator, value: string, workday
   await loc.pressSequentially(oracle && /^[^,]{2,}, /.test(value) && !choose ? value.split(',')[0] : value, { delay: 25 })
   // Workday searches on Enter. Anywhere else Enter can submit the form, so it is never pressed there.
   if (workday) await loc.press('Enter').catch(() => {})
-  await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 4000 }).catch(() => {})
+  await frame.locator(OPT + ':visible').first().waitFor({ state: 'visible', timeout: 4000 }).catch(() => {})
   // SuccessFactors fetches its list from the server as you type, like Workday: wait for the matching option
   // instead of choosing from whatever is on screen after a fixed pause.
-  const slow = workday || /successfactors|sapsf/i.test(frame.page().url())
+  const slow = workday || /successfactors|sapsf/i.test(frame.page().url()) || (await loc.evaluate((e: HTMLElement) => !!e.closest('.selectize-control')).catch(() => false))
   // Oracle Cloud shows the matching postal code or city for about a second, then falls back to its full list: the
   // match is clicked the moment it appears.
   if (oracle) for (let i = 0, any = false; i < 40; i++) {
@@ -580,10 +632,20 @@ async function pickInCombobox(frame: Frame, loc: Locator, value: string, workday
     await clearSearch(loc)
     await loc.pressSequentially(keyWords[0], { delay: 25 })
     await loc.press('Enter').catch(() => {})
-    await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 4000 }).catch(() => {})
+    await frame.locator(OPT + ':visible').first().waitFor({ state: 'visible', timeout: 4000 }).catch(() => {})
     shown = await settledOptions(frame, value, true, choose)
     if (choose && choose(shown) < 0) shown = await scrollForOption(frame, choose)
     picked = await clickOption(frame, value, choose)
+  }
+  // Greenhouse's degree list says "Bachelor's Degree", "Master's Degree" ...: "Bachelor of Engineering" finds nothing,
+  // but its first word does.
+  const degreeWord = !choose && !picked && /^(bachelor|master|associate|doctor)/i.test(value.trim()) && (await loc.evaluate((e: HTMLElement) => !!e.closest('.selectize-control')).catch(() => false)) ? norm(value).split(' ')[0].slice(0, 6) : ''
+  if (degreeWord) {
+    await clearSearch(loc)
+    await loc.pressSequentially(degreeWord, { delay: 25 })
+    await frame.locator(OPT + ':visible').first().waitFor({ state: 'visible', timeout: 4000 }).catch(() => {})
+    shown = await settledOptions(frame, value, true, o => o.findIndex(t => norm(t).startsWith(degreeWord)))
+    picked = await clickOption(frame, value, o => o.findIndex(t => norm(t).startsWith(degreeWord)))
   }
   if (!picked) {
     // Search text did not match an option: clear it and pick from the full list instead.
@@ -591,7 +653,7 @@ async function pickInCombobox(frame: Frame, loc: Locator, value: string, workday
     await frame.page().keyboard.press('Escape').catch(() => {})
     await loc.evaluate((e: HTMLElement) => e.blur()).catch(() => {})
     await loc.focus().catch(() => {}); await loc.press('ArrowDown').catch(() => {})   // reopen the full list
-    await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 2000 }).catch(() => {})
+    await frame.locator(OPT + ':visible').first().waitFor({ state: 'visible', timeout: 2000 }).catch(() => {})
     shown = await visibleOptions(frame)
     picked = await clickOption(frame, value, choose)
   }
@@ -777,6 +839,14 @@ async function fillStudy(p: Page, x: Located, major: string, workday: boolean, r
         if (workday && now.f.value.trim()) { await loc.focus().catch(() => {}); await clearSearch(loc); await loc.press('Backspace').catch(() => {}); await closeLists(frame) }
       }
     }
+    // Greenhouse's discipline list is a short fixed one ("Engineering", "Computer Science", ...) with no "Mechanical
+    // Engineering": its broad category (the last word of the major, matched whole) is the nearest honest choice.
+    if (await loc.evaluate((e: HTMLElement) => !!e.closest('.selectize-control')).catch(() => false)) {
+      for (const word of norm(major).split(' ').filter(t => t.length > 3).reverse()) {
+        const got = await pickInCombobox(frame, loc, word, workday, opts => opts.findIndex(o => norm(o) === word)).catch(() => null)
+        if (got) { res.filled.push(`${label}: ${got} (closest option; this list has no "${major}")`); return }
+      }
+    }
     res.skipped.push(`${label} (could not find ${major}${lastOffered.length ? `; the list offered: ${lastOffered.map(o => o.slice(0, 30)).join(', ')}` : ''})`)
     return
   }
@@ -833,7 +903,8 @@ function savedAnswersText(p: Profile): string {
  */
 async function decide(fields: Field[], job: Job, profile: Profile, resume: Resume, tailored: Tailored | null, model: string, retry?: Map<number, string>, whys?: Map<number, string>): Promise<Map<number, Answer['value']>> {
   whys?.clear()   // ids are renumbered on every pass
-  const today = new Date().toISOString().slice(0, 10)
+  // The local date, not UTC: after 7 p.m. Eastern the UTC date is already tomorrow, and forms that want "today" refuse it.
+  const now = new Date(); const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
   const list = fields.map(f => ({
     id: f.idx, type: f.kind === 'combobox' ? (f.multi ? 'searchable multi-select' : 'searchable dropdown') : f.kind === 'dropdown' ? 'dropdown' : f.kind,
     ...(f.inputType && !['text', 'textarea', 'select', 'radio', 'checkbox', 'dropdown', 'combobox'].includes(f.inputType) ? { inputType: f.inputType } : {}),
@@ -887,7 +958,7 @@ How to answer:
 - A Canadian citizen's U.S. work authorization comes through citizenship (TN status under USMCA/NAFTA), which the employer still has to support. So for a U.S. job, when the candidate is a Canadian citizen and a question about visa type, sponsorship or work status offers a TN / USMCA / NAFTA / "Canadian citizen" option, pick that option over a generic "I require sponsorship" or "other visa" one.
 - Permanent residency ("Do you hold permanent resident / green card / legal permanent resident status in ..."): a citizen of a country is not a permanent resident of it; answer from candidate_facts, and No for any country the candidate is not a citizen or permanent resident of.
 - Follow-up and conditional questions ("If yes, ...", "If no, please explain", "If you are not authorized ..., what is your status?", "If other, specify"): read the question they depend on. If the condition does not apply to the candidate, write "N/A" in a text box, or pick the option meaning not applicable / none / No. If it does apply, answer it from the facts.
-- History questions whose answer is not in the facts (held a J-1/J-2 or other U.S. visa before, applied or worked here before, relatives at the company or in government, government official, conflict of interest, non-compete, security clearance, convicted of a crime, terminated from a job): answer what is true for an ordinary second-year university student with this resume: No / None / Not applicable.
+- History questions whose answer is not in the facts (held a J-1/J-2 or other U.S. visa before, applied or worked here before, relatives at the company or in government, government official, conflict of interest, non-compete, security clearance, convicted of a crime, terminated from a job): answer what is true for an ordinary second-year university student with this resume: No / None / Not applicable. A student, research assistant, co-op or intern at a university or college is NOT a government employee or official (even where the school is publicly funded): answer government-employment questions No ("not a current or former government employee") unless candidate_facts says otherwise.
 - Experience questions: use the resume. A research internship, co-op or engineering internship counts as internship / co-op experience; student design teams and projects count as hands-on engineering experience. Years of professional experience: less than 1 (or 0) unless the resume shows more.
 - Every identification question (gender, gender identity, transgender, pronouns, sex, race, ethnicity, Hispanic/Latino, Indigenous/Aboriginal, visible minority, member of a designated or equity-seeking group, veteran or military status, disability, sexual orientation / LGBTQ+, religion, age range, marital status and anything similar): use the candidate's self-identification above, and by default do NOT identify. Choose the option that declines ("I don't wish to answer", "Decline to self-identify", "Prefer not to say", "I do not want to answer"). If there is no declining option and the field is optional, leave it out. If it is required and has no declining option, choose the option that does not identify the candidate with any group (e.g. "No" for "Do you identify as a member of a visible minority?"), never a specific identity. Never guess these from a name or anything else.
 - Be lenient: tick or say Yes to consent, acknowledgement, privacy, "I certify", "I understand", terms and conditions, text (SMS) message, recruiting-communication and job-alert questions. When unsure whether to agree to something, agree.
@@ -909,6 +980,7 @@ How to answer:
 - Links: LinkedIn, GitHub and website come from the facts. A required website / portfolio / "other link" field with no such link in the facts gets the LinkedIn URL. Treat a field as required when its text says so, even without a required mark ("your application will not be considered without ...", "must include", "please provide").
 - Fields with type "wddate" are dates: reply in exactly the format in inputType (e.g. "09/2025" for "date MM/YYYY", "11/14/2026" for "date MM/DD/YYYY", "2025" for "date YYYY"). "From"/"To" in a Work Experience or Education section are that entry's start/end dates from the resume; if the resume only gives a year, use 09 for a fall start, 05 for a summer start, 01 otherwise. For a degree in progress the To date is the expected graduation. For a current role give the expected end date only if one is known, otherwise "", and also tick that entry's "I currently work here" box (same section).
 - Searchable multi-select of skills: reply with an array of up to 8 skills from the resume.
+- Internship earliest start date / latest end date (or availability window): the internship term named in the posting or title; otherwise a realistic window for the coming summer (start in May, end in August) after the candidate's current term ends. Never today's date, never a past date, and the end date must be after the start date. Graduation date: the expected graduation in candidate_facts, in the field's format.
 - Dates: match the format the label or inputType implies (MM, YYYY, MM/YYYY, YYYY-MM-DD). A "date" for a signature or self-identification form is today. A signature or "type your full name" box gets the candidate's full name.
 - Fields in sections like "Work Experience 1", "Work Experience 2", "Education 1" map to the resume entries in the order they appear on the resume. "Role Description" or similar: 2 to 4 plain sentences from that entry's bullets.
 - Notice period: "2 weeks".
@@ -1027,12 +1099,28 @@ async function applyAnswer(x: Located, value: Answer['value'], workday: boolean,
       if (f.name.startsWith('pickdate')) {
         // A date box with a calendar pop-up: type the date, close the calendar, check the box kept it.
         const box = loc.first()
+        await box.evaluate(e => e.setAttribute('data-ih-filled', '1')).catch(() => {})
         await box.click({ timeout: 3000 }).catch(() => box.focus())
         await box.fill(padded.join(sep)).catch(async () => { await box.press('ControlOrMeta+a'); await frame.page().keyboard.type(padded.join(sep), { delay: 40 }) })
         await box.press('Enter').catch(() => {})
         await frame.page().keyboard.press('Escape').catch(() => {})
         await box.press('Tab').catch(() => {})
-        const now = await box.inputValue().catch(() => '')
+        let now = await box.inputValue().catch(() => '')
+        // Some pickers (Amazon.jobs) drop a value set in one go once the box loses focus: type it key by key instead.
+        await frame.page().waitForTimeout(500)
+        if (process.env.IH_AUTOAPPLY_DEBUG) console.log('[pickdate] after fill', JSON.stringify(await box.inputValue().catch(() => '')))
+        // (Only when the box ended up empty or back at the picker's default today: a picker may reformat a valid value.)
+        const afterFill = await box.inputValue().catch(() => '')
+        const todayDefault = padded.join(sep) !== afterFill && (() => { const d = new Date(); return afterFill === `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` })()
+        if (!afterFill || todayDefault) {
+          await box.click({ timeout: 3000 }).catch(() => {})
+          await box.press('ControlOrMeta+a').catch(() => {})
+          await box.pressSequentially(padded.join(sep), { delay: 60 }).catch(() => {})
+          await box.press('Tab').catch(() => {})
+          await frame.page().waitForTimeout(500)
+          now = await box.inputValue().catch(() => '')
+          if (process.env.IH_AUTOAPPLY_DEBUG) console.log('[pickdate] after typing', JSON.stringify(now))
+        }
         if (now) res.filled.push(`${label}: ${now}`); else res.skipped.push(`${label} (the date picker did not take "${padded.join(sep)}")`)
         return
       }
@@ -1093,6 +1181,17 @@ async function applyAnswer(x: Located, value: Answer['value'], workday: boolean,
       for (const w of wants) {
         const i = bestOption(f.options, w); if (i < 0) continue
         const opt = frame.locator(`[data-ih-idx="${f.idx}"][data-ih-opt="${i}"]`).first()
+        // Chip groups: the chip's "+" button adds it (and the chip then leaves the list).
+        if (f.inputType === 'chips') {
+          // The tagged button may be gone after a re-render: fall back to the Add button named for this chip.
+          const esc = f.options[i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+          const alt = frame.locator('button:not([aria-label^="remove" i]):not([aria-label^="delete" i])').and(frame.getByRole('button', { name: new RegExp(`(^|\\s)${esc}\\s*$`, 'i') })).first()
+          let ok = await opt.click({ timeout: 2500 }).then(() => true).catch(() => false)
+          if (!ok) ok = await alt.click({ timeout: 2500 }).then(() => true).catch(() => false)
+          await frame.page().waitForTimeout(250)
+          if (ok) ticked.push(f.options[i])
+          continue
+        }
         await tick(frame, opt)
         ticked.push(f.options[i])
       }
@@ -1103,12 +1202,12 @@ async function applyAnswer(x: Located, value: Answer['value'], workday: boolean,
       if (!text.trim() || /^(select one|select|choose one)$/i.test(text.trim())) return
       await closeLists(frame)
       await loc.first().click({ timeout: 2500 })
-      await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 2500 }).catch(() => {})
+      await frame.locator(OPT + ':visible').first().waitFor({ state: 'visible', timeout: 2500 }).catch(() => {})
       let picked = await clickOption(frame, text)
       const shows = async (): Promise<boolean> => !!picked && (await loc.first().innerText().catch(() => '')).replace(/\s+/g, ' ').includes(picked.slice(0, 40))
       if (picked && !(await frame.page().waitForTimeout(400).then(shows))) {
         await closeLists(frame); await loc.first().click({ timeout: 2500 }).catch(() => {})
-        await frame.locator(OPT).first().waitFor({ state: 'visible', timeout: 2500 }).catch(() => {})
+        await frame.locator(OPT + ':visible').first().waitFor({ state: 'visible', timeout: 2500 }).catch(() => {})
         picked = await clickOption(frame, text)
         if (picked && !(await frame.page().waitForTimeout(400).then(shows))) picked = null
       }

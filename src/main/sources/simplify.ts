@@ -8,6 +8,7 @@
 // Every listing still goes through the normal filter (good employers, mechanical relevance, term, sponsorship).
 import type { Board, RawJob } from '../../shared/types'
 import { BOARDS, KNOWN } from '../companies'
+import { isAiLarge } from '../filter'
 import { UA, getJson, htmlToText } from './util'
 
 const LIST_URL = 'https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/.github/scripts/listings.json'
@@ -58,7 +59,7 @@ export const canonicalCompany = (name: string): string => { const k = companyKey
  * Ontario jobs are kept, the same rule the curated small boards follow.
  */
 const BIG = new Set([...KNOWN, ...BOARDS.filter(b => b.big).map(b => b.company)])
-export const isBigEmployer = (company: string): boolean => BIG.has(company)
+export const isBigEmployer = (company: string): boolean => BIG.has(company) || isAiLarge(company)
 
 // The list's shorthand for cities, written out so the region rules recognise them.
 const CITY: [RegExp, string][] = [[/^South SF$/i, 'South San Francisco, CA'], [/^SF$/i, 'San Francisco, CA'], [/^LA$/i, 'Los Angeles, CA'], [/^NYC$/i, 'New York, NY'], [/^DC$/i, 'Washington, DC']]

@@ -20,10 +20,16 @@ const KEY_US = new RegExp([
 ].join('|'), 'i')
 /** True when a US location is in California, Texas, Florida or New York City. */
 export const inKeyUsArea = (location: string): boolean => KEY_US.test(location || '')
+// Companies outside the hand-made KNOWN list that the AI judged large (see sources/company-size.ts). Held here so the
+// filter and simplify.ts can read it without importing the AI or database code.
+const aiLarge = new Set<string>()
+const lc = (s: string): string => s.trim().toLowerCase()
+export function setAiLarge(names: Iterable<string>): void { aiLarge.clear(); for (const n of names) aiLarge.add(lc(n)) }
+export const isAiLarge = (company: string): boolean => aiLarge.has(lc(company))
 /** UK jobs are kept only at well-known employers. */
 export const ukAllowed = (company: string): boolean => KNOWN.has(company)
 /** Whether a job's US location is allowed for this employer: anywhere for household names, the four key areas for everyone else. */
-export const usAllowed = (company: string, location: string): boolean => KNOWN.has(company) || inKeyUsArea(location)
+export const usAllowed = (company: string, location: string): boolean => KNOWN.has(company) || isAiLarge(company) || inKeyUsArea(location)
 // Big employers that post one pooled internship for all teams, with a description too general to mention mechanical work.
 const POOLED = /\b(product design|hardware|manufacturing design)\b.*\bundergrad/i
 
@@ -171,6 +177,8 @@ const INTERN = /\b(intern|interns|internship|internships|co-?op|student|summer (
 export const isInternTitle = (title: string): boolean => INTERN.test(title.replace(NOT_INTERN, ''))
 const NOT_INTERN = /\b(manager of interns|internal|international)\b/i
 const ME_TITLE = /\b(mechanical|mechatronics?|manufacturing|thermal|thermo|fluids?|structures?|structural|propulsion|aerospace|aeronautical|robotics?|hardware|design eng|product design|test eng|materials?|quality eng|process eng|industrial eng|automation|tooling|cad|mechanisms?|vehicle|powertrain|chassis|battery|hvac|reliability|systems eng|production eng|build eng|integration|launch|avionics mech|nuclear|energy|equipment|aero|aerodynamics?|aerodynamicist|composites?|vehicle dynamics|race eng|performance eng|trackside|suspension|gearbox|drivetrain|wind tunnel|facilities eng|r&d|research and development|product development|engineering)\b/i
+// "Mechanical" and its common abbreviations: "Mech Eng", "Mech. Engineering", "Mechanical Eng", "MechE", "Mech Design/Engineer".
+const MECH_TITLE = /\b(mechanical|mechatronics?|meche|mech\.?\s+(eng|engineer|engineering|design))\b/i
 const OFF_TITLE = /\b(software|firmware|data sci|data eng|data analy|machine learning|\bml\b|\bai\b|finance|financial|accounting|marketing|legal|recruit|talent|human resources|\bhr\b|sales|business|supply chain|procurement|communications|design (ux|ui)|ux|ui|graphic|security eng|it support|information technology|cyber|web|cloud|devops|backend|frontend|full.?stack|electrical|electronics|\basic\b|fpga|rf\b|digital design|analog|verification|chemist|biolog|clinical|regulatory|policy|tax|audit|payroll|pilot|nurs|phd|ph\.d|mba)\b/i
 const ME_BODY = /\b(mechanical|mechatronics|solidworks|catia|siemens nx|creo|autocad|ansys|gd&t|finite element|fea\b|cfd\b|machining|cnc|3d print|additive manufacturing|dfm|thermodynamics|heat transfer|fluid mechanics|aerodynamics?|composites?|carbon fib(re|er)|vehicle dynamics|suspension (design|geometry|kinematics)|wind tunnel|lap sim(ulation)?|formula student|fsae|formula sae|cae\b)\b/i
 
@@ -184,17 +192,17 @@ export function checkJob(j: RawJob): FilterVerdict & { needBody?: boolean } {
   const vague = raw === 'unknown'
   // F1 teams recruit in Italy, Switzerland and France; those stay in, as region 'other'.
   const f1Abroad = raw === 'other' && MOTORSPORT.has(j.company) && /italy|switzerland|france|maranello|faenza|hinwil|ch[aâ]tillon/i.test(j.location)
-  if ((raw === 'other' && !f1Abroad) || (vague && !j.big)) return { keep: false, region: 'other', reason: 'outside Canada, the USA and the UK, or location unclear' }
+  if ((raw === 'other' && !f1Abroad) || (vague && !(j.big || isAiLarge(j.company)))) return { keep: false, region: 'other', reason: 'outside Canada, the USA and the UK, or location unclear' }
   if (raw === 'uk' && !ukAllowed(j.company)) return { keep: false, region: 'uk', reason: 'UK job at a lesser-known employer' }
   const region: Region = vague ? 'usa' : raw
-  if (region !== 'ontario' && !j.big) return { keep: false, region, reason: 'not a large employer outside Ontario' }
+  if (region !== 'ontario' && !j.big && !isAiLarge(j.company)) return { keep: false, region, reason: 'not a large employer outside Ontario' }
   if (region === 'usa' && US_DEFENSE.has(j.company)) return { keep: false, region, reason: 'U.S. defense employer (U.S. persons only)' }
   // A vague location is let through here and settled once the posting itself has been read (see refresh.ts).
   if (raw === 'usa' && !usAllowed(j.company, j.location)) return { keep: false, region, reason: 'lesser-known employer outside California, Texas, Florida and New York City' }
   const title = j.title
   if (!INTERN.test(title.replace(NOT_INTERN, ''))) return { keep: false, region, reason: 'not an internship or co-op' }
   if (/\b(phd|ph\.d\.?|doctoral|mba)\b/i.test(title)) return { keep: false, region, reason: 'graduate-degree role' }
-  const mechInTitle = /\b(mechanical|mechatronics?)\b/i.test(title)
+  const mechInTitle = MECH_TITLE.test(title)
   if (!mechInTitle && OFF_TITLE.test(title)) return { keep: false, region, reason: 'different discipline' }
   const tp = termProblem(title, '', j.company)
   if (tp) return { keep: false, region, reason: tp }

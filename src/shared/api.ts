@@ -43,6 +43,7 @@ export interface Api {
   saveAnswers(jobId: string, answers: SavedAnswer[]): Promise<void>   // keeps answers for every later form and clears the job's flag
   clearAllAutoApplyFlags(): Promise<void>
   showAutoApplyShot(jobId: string): Promise<void>
+  checkRejections(): Promise<RejectionCheck>         // reads Gmail (read-only) for rejection emails and marks the matching tracked jobs Rejected
   onAutoApply(fn: (r: AutoApplyResult) => void): () => void
   onLiveRun(fn: (r: LiveRun) => void): () => void
   getLiveRun(): Promise<LiveRun | null>
@@ -57,8 +58,15 @@ export interface Api {
   onPrefillUpdate(fn: (u: { jobId: string; result: PrefillResult }) => void): () => void
 }
 
+/** One rejection email matched to a tracked job, which the check marked Rejected. */
+export interface RejectionMatch { jobId: string; company: string; title: string; previous: JobStatus; subject: string; from: string; at: string }
+/** A rejection email the check could not tie to one tracked job (no such job, several possible jobs, or older than the application). */
+export interface RejectionUnmatched { company: string; subject: string; from: string; at: string; why: string }
+/** Result of "Check email for rejections". */
+export interface RejectionCheck { searched: number; newEmails: number; rejections: number; marked: RejectionMatch[]; alreadyRejected: number; unmatched: RejectionUnmatched[] }
+
 /** Summary of one scheduled run (kv lastScheduledRun). */
 export interface ScheduledRun { startedAt: string; endedAt?: string; refresh?: { fetched: number; added: number; removed: number; errors: number }; scored?: number; targets?: number; applied?: number; flagged?: number; left?: number; error?: string; refreshError?: string; scoreError?: string; applyError?: string }
 
 export const CHANNELS = ['getState', 'importResume', 'chooseResumePdf', 'addDocuments', 'setDocumentKind', 'removeDocument', 'revealDocument', 'revealResumePdf', 'saveResume', 'saveProfile', 'saveSettings', 'listJobs', 'getJob', 'updateJob', 'refresh',
-  'score', 'rescore', 'setWorkdayLogin', 'clearWorkdayLogin', 'connectGmail', 'disconnectGmail', 'addJob', 'tailor', 'saveTailored', 'revealPdf', 'prefill', 'fillAgain', 'openExternal', 'getActivity', 'stopAll', 'autoApply', 'clearAutoApplyFlag', 'saveAnswers', 'clearAllAutoApplyFlags', 'getLiveRun', 'getScheduledRun', 'skipAutoApply', 'showAutoApplyShot'] as const
+  'score', 'rescore', 'setWorkdayLogin', 'clearWorkdayLogin', 'connectGmail', 'disconnectGmail', 'addJob', 'tailor', 'saveTailored', 'revealPdf', 'prefill', 'fillAgain', 'openExternal', 'getActivity', 'stopAll', 'autoApply', 'clearAutoApplyFlag', 'saveAnswers', 'clearAllAutoApplyFlags', 'getLiveRun', 'getScheduledRun', 'skipAutoApply', 'showAutoApplyShot', 'checkRejections'] as const

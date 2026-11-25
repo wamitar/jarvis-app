@@ -32,7 +32,7 @@ const DRY = !!process.env.IH_AUTOAPPLY_DRYRUN
 const limitText = (): string => { const s = Math.round(LIMIT_MS / 1000); return s >= 60 ? `${Math.floor(s / 60)} min${s % 60 ? ` ${s % 60} s` : ''}` : `${s} seconds` }
 
 // Only ever checked after the app pressed Submit: job pages often say "thank you for your interest".
-const CONFIRMED = /thank you for (applying|your application|submitting)|thanks for applying|application (has been |was )?(successfully )?(submitted|received|sent|complete)|successfully (submitted|applied)|we('ve| have) received your application|you('ve| have) (successfully )?applied|your application is (complete|on its way)/i
+const CONFIRMED = /thank you for (applying|your (job )?application|submitting)|thanks for applying|application (has been |was )?(successfully )?(submitted|received|sent|complete)|successfully (submitted|applied)|we('ve| have) received your application|you('ve| have) (successfully )?applied|your application is (complete|on its way)/i
 // A posting taken down. Workday shows its "doesn't exist" page only after loading, so this is checked on every look.
 const CLOSED = /job (is )?no longer (available|open|accepting)|no longer accepting (applications|applicants|candidates)|position has been filled|this job (posting )?(has )?(closed|expired)|page (you|you're|you are) looking for (doesn't|does not|no longer|can't|cannot)|page (you|you're|you are) looking for/i
 /** The button on a job page that opens its application form. */
@@ -47,7 +47,8 @@ const lockedOut = (text: string): string => {
 /** A screen asking for an emailed code or link: a few boxes, or only boxes for the code's digits. */
 const isCodeScreen = (labels: string[]): boolean => labels.length <= 4 || labels.every(l => /code|digit|otp|passcode|pin\b/i.test(l))
 const VERIFY_EMAIL = /verify your (email|account)|verification (code|link|email)|check your (email|inbox)|enter the (code|one-time)|we sent (you )?(a|an) (code|email)/i
-const SUBMIT_TEXT = /^\s*(submit( (my |your )?application)?|send application|complete application|finish( application)?|apply)\s*$/i
+// (Greenhouse's embedded form keeps its busy and done captions inside the button: "Submit your application Please wait... Done".)
+const SUBMIT_TEXT = /^\s*(submit( (my |your )?application)?(\s+please\s+wait\W*(\s+done)?)?|send application|complete application|finish( application)?|apply)\s*$/i
 const NEXT_TEXT = /^\s*(next|continue|save (and|&) continue|save and next|proceed)\s*$/i
 
 class Skipped extends Error {}
@@ -207,7 +208,8 @@ async function pressByText(p: Page, re: RegExp, links = false): Promise<boolean>
 }
 async function pressByTextIn(p: Frame, re: RegExp, links = false): Promise<boolean> {
   // links: job pages often draw "Apply now" as a styled link (Amazon, SmartRecruiters, Apple).
-  const btn = p.locator(`button, input[type="submit"], input[type="button"], a[role="button"], [role="button"]${links ? ', a[href]' : ''}`).locator('visible=true').filter({ hasText: re })
+  // (Not a slide show's arrows: Waymo's page has a hidden-text "Next" carousel button above the form.)
+  const btn = p.locator(`button:not([data-bs-slide]):not([class*="carousel" i]), input[type="submit"], input[type="button"], a[role="button"]:not([data-bs-slide]), [role="button"]:not([data-bs-slide])${links ? ', a[href]' : ''}`).locator('visible=true').filter({ hasText: re })
   const input = p.locator('input[type="submit"], input[type="button"]').locator('visible=true')
   let target = btn.last()
   if (!(await target.count().catch(() => 0))) {
@@ -339,7 +341,7 @@ async function drive(start: Page, args: Args, hooks: WorkdayHooks, deadline: num
   }
   if (/[?&]error=true|\/jobs\/?$|job.?not.?found|404/i.test(start.url()) || CLOSED.test(await bodyText(start)))
     throw new Flag('the posting has closed')
-  let lastSig = '', same = 0, filledHere = '', mailTries = 0, glitches = 0, emailSteps = 0, sfReset = false
+  let lastSig = '', same = 0, filledHere = '', mailTries = 0, glitches = 0, emailSteps = 0, sfReset = false, pagesFilled = 0
   const started = Date.now()
   const opened = new Set(A.openPages())
   const myToken = jobToken
@@ -419,6 +421,7 @@ async function drive(start: Page, args: Args, hooks: WorkdayHooks, deadline: num
       }
       if (process.env.IH_AUTOAPPLY_DEBUG) console.log(`[auto-apply] ${step || 'Workday'} | ${r.page} | filled ${r.filled.join(', ').slice(0, 600)} | ${r.note.slice(0, 160)}${r.skipped.length ? ` | skipped ${r.skipped.join('; ').slice(0, 800)}` : ''}`)
       filledHere = sig
+      if (r.filled.length) pagesFilled++
       say(stepText(r)); keep(r)
       const why = problems(r) || blockingNote(r.note)
       const tenant = new URL(p.url()).hostname.split('.')[0]
@@ -483,6 +486,15 @@ async function drive(start: Page, args: Args, hooks: WorkdayHooks, deadline: num
           await btn.click({ timeout: 5000 }).catch(() => {})
           await p.waitForTimeout(3500); continue
         }
+      }
+      // A review step (Amazon.jobs' "Review & submit"): no boxes left, only the Submit button. A bare "Apply" button does not count.
+      // Only with real review wording, after this job already had a page filled, and once the same page was seen twice
+      // (never a first or resume-only page: "we will review your application" is everywhere).
+      if (/review\s*(&|and)\s*submit|review your (application|answers|information|details)|please review/i.test(text) && pagesFilled > 0 && same >= 1 && fields.every(x => !x.f.required || x.f.kind === 'file' || x.f.value.trim())) {
+        const REVIEW_SUBMIT = /^\s*(submit( (my |your )?application)?|send application|complete application|finish( application)?)\s*$/i
+        let sub = 0
+        for (const f of p.frames()) sub += await f.locator('button, input[type="submit"], [role="button"]').locator('visible=true').filter({ hasText: REVIEW_SUBMIT }).count().catch(() => 0)
+        if (sub > 0) { setPage('Review & submit'); await submitFinal(p, false, deadline, job); return }
       }
       // Some job pages need an Apply click first.
       // Never on a page that is itself a form (a resume-only form ends with an "Apply" button that sends it): there,

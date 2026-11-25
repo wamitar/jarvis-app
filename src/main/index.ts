@@ -8,9 +8,11 @@ import { defaultSettings, emptyProfile, emptyResume } from '../shared/types'
 import type { AppState } from '../shared/api'
 import * as db from './db'
 import { resolveStored } from './sources/linkedin-resolve'
+import { loadCompanySizes } from './sources/company-size'
 import { aiFound, aiName, askJson, setProvider, setUsageListener } from './ai/claude'
 import * as keychain from './keychain'
 import * as gmail from './mail/gmail'
+import { checkRejections } from './mail/rejections'
 import { normalizeResume, pdfToText, structureResume } from './resume/parse'
 import { tailorResume, shortenResume, findInventions, bankOf } from './resume/tailor'
 import { getActivity, setActivityListener, stopAll, track, StoppedError } from './activity'
@@ -159,7 +161,10 @@ function runLog(line: string): void {
 }
 function autoApplyTargets(): string[] {
   const marks = db.kvGet<Record<string, AutoApplyResult>>('autoApply', {})
-  return db.listJobs().filter(j => !['applied', 'interview', 'offer', 'rejected', 'hidden'].includes(j.status) && !marks[j.id]).map(j => j.id)
+  // A LinkedIn-alert job not yet found on the employer's site is left to the refresh's lookups (40 a refresh): looking
+  // each one up during the run would cost minutes per job, and most old alerts turn out closed.
+  return db.listJobs().filter(j => !['applied', 'interview', 'offer', 'rejected', 'hidden'].includes(j.status) && !marks[j.id] &&
+    !(j.source === 'linkedin' && /linkedin\.com/i.test(j.applyUrl || j.url))).map(j => j.id)
 }
 async function scheduledRun(): Promise<void> {
   if (scheduledRunning || busy) { runLog('skipped: another run was still going'); return }
@@ -422,6 +427,8 @@ function handlers(): void {
     db.kvSet('settings', { ...settings(), gmailClientId: clientId, gmailClientSecret: clientSecret })
     return { email: await gmail.connect(gmailStore, url => shell.openExternal(url)) }
   }, 'Connecting Gmail')
+  let rejectionRun: Promise<unknown> | null = null   // single-flight: a second click or a return to the page joins the run in progress
+  h('checkRejections', () => rejectionRun ||= checkRejections(settings().scoreModel).finally(() => { rejectionRun = null }), 'Checking email for rejections')
   h('disconnectGmail', async (): Promise<{ email: string }> => { await gmail.disconnect(gmailStore); return { email: '' } })
   h('openExternal', (url: string) => { if (/^https?:\/\//.test(url)) return shell.openExternal(url) })
 }
@@ -439,6 +446,7 @@ else app.on('second-instance', (_e, argv) => {
 app.whenReady().then(() => {
   db.openDb(join(app.getPath('userData'), 'internship-hunter.db'))
   gmail.useStore(gmailStore)
+  loadCompanySizes()   // AI-judged large employers, for the filter (Add a job by link, pruning)
   setProvider(settings().aiProvider)
   useDocuments(() => db.kvGet<DocFile[]>('documents', []))
   setDiscoveredBoards(db.kvGet('discoveredBoards', []))

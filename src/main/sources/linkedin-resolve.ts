@@ -188,7 +188,8 @@ export const missReason = (jobId: string): string => lookups()[jobId]?.why || ''
 export async function resolvePending(max: number, each: (done: number, total: number) => void, stop: () => boolean): Promise<number> {
   const seen = lookups()
   const todo = db.listJobs().filter(j => j.source === 'linkedin' && stillOnLinkedIn(j) && !['applied', 'hidden'].includes(j.status) &&
-    !(seen[j.id] && !seen[j.id].url && Date.now() - seen[j.id].at < (/rate limited|search failed|answered 429/.test(seen[j.id].why) ? 3600_000 : 3 * 86400_000))).slice(0, max)
+    !(seen[j.id] && !seen[j.id].url && Date.now() - seen[j.id].at < (/rate limited|search failed|answered 429/.test(seen[j.id].why) ? 3600_000 : 3 * 86400_000)))
+    .sort((a, b) => (b.postedAt || '').localeCompare(a.postedAt || '')).slice(0, max) // newest alerts first
   let done = 0, found = 0
   const queue = [...todo]
   const worker = async (): Promise<void> => {

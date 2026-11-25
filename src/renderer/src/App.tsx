@@ -103,7 +103,7 @@ export function App() {
         </>)}
         {page === 'jobs' && <JobsPage state={state} jobs={jobs} selected={selected} setSelected={setSelected} reload={reload} notify={notify} busy={!!progress} go={setPage} />}
         {page === 'status' && <StatusPage state={state} jobs={jobs} activity={activity} reload={reload} openJob={openJob} />}
-        {page === 'tracker' && <TrackerPage jobs={jobs} reload={reload} openJob={openJob} />}
+        {page === 'tracker' && <TrackerPage jobs={jobs} reload={reload} openJob={openJob} gmailEmail={state.gmail.email} />}
         {page === 'resume' && <ResumePage state={state} reload={reload} notify={notify} go={setPage} />}
         {page === 'profile' && <ProfilePage state={state} reload={reload} notify={notify} />}
         {page === 'settings' && <SettingsPage state={state} reload={reload} notify={notify} />}
