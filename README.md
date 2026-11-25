@@ -26,6 +26,10 @@ It uses the Claude Code sign-in on this Mac, so there is no API key and no extra
 12. **Job pages and sign-ins**: presses "Apply now" / "I'm interested" style links, handles email-first sign-in pages, and deletes empty extra Workday experience blocks. Required consent boxes (terms, privacy) are ticked; optional newsletters, job alerts and marketing boxes never are.
 13. **LinkedIn alert jobs**: each job from a LinkedIn alert email is looked up on the employer's own careers site (the AI searches the web with only the job title, company and location). A link is kept only after the app loads it and sees the same title and company, never a job board or a re-post. The job then gets the full posting (for scoring and tailoring) and is auto-applied there. Up to 20 are looked up per refresh, the rest at auto-apply time; a miss is tried again after three days (after an hour when the site was only busy). LinkedIn itself is never opened.
 
+## Scheduled runs (unattended)
+
+`sh scripts/schedule.sh` installs a LaunchAgent (`local.jarvis.pipeline`) that starts the packaged app with `--scheduled-run` at 9:00 and 21:00. Each run gets jobs, scores them, then auto-applies to every open job that has no auto-apply mark yet (jobs flagged before are left for you; no daily limit). If the app is open, that copy does the run; otherwise it starts without a window and quits afterwards. The Stop switch stops it. The result shows on the Status page and in `scheduled-runs.log` in the data folder. `sh scripts/schedule.sh now` starts a run at once; `sh scripts/schedule.sh remove` uninstalls it.
+
 ## Limits
 
 - LinkedIn and Indeed are not searched (they do not allow it). Jobs from LinkedIn alert emails are applied on the employer's own site when it is found there; jobs only on LinkedIn (Easy Apply) are flagged for you. Otherwise use **Add a job by link** and paste the posting.

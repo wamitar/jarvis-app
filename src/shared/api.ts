@@ -46,6 +46,8 @@ export interface Api {
   onAutoApply(fn: (r: AutoApplyResult) => void): () => void
   onLiveRun(fn: (r: LiveRun) => void): () => void
   getLiveRun(): Promise<LiveRun | null>
+  getScheduledRun(): Promise<ScheduledRun | null>   // the last 9:00 / 21:00 run started by launchd
+  onScheduledRun(fn: (r: ScheduledRun) => void): () => void
   skipAutoApply(jobId: string): Promise<boolean>
   getActivity(): Promise<Activity>
   stopAll(): Promise<Activity>
@@ -55,5 +57,8 @@ export interface Api {
   onPrefillUpdate(fn: (u: { jobId: string; result: PrefillResult }) => void): () => void
 }
 
+/** Summary of one scheduled run (kv lastScheduledRun). */
+export interface ScheduledRun { startedAt: string; endedAt?: string; refresh?: { fetched: number; added: number; removed: number; errors: number }; scored?: number; targets?: number; applied?: number; flagged?: number; left?: number; error?: string; refreshError?: string; scoreError?: string; applyError?: string }
+
 export const CHANNELS = ['getState', 'importResume', 'chooseResumePdf', 'addDocuments', 'setDocumentKind', 'removeDocument', 'revealDocument', 'revealResumePdf', 'saveResume', 'saveProfile', 'saveSettings', 'listJobs', 'getJob', 'updateJob', 'refresh',
-  'score', 'rescore', 'setWorkdayLogin', 'clearWorkdayLogin', 'connectGmail', 'disconnectGmail', 'addJob', 'tailor', 'saveTailored', 'revealPdf', 'prefill', 'fillAgain', 'openExternal', 'getActivity', 'stopAll', 'autoApply', 'clearAutoApplyFlag', 'saveAnswers', 'clearAllAutoApplyFlags', 'getLiveRun', 'skipAutoApply', 'showAutoApplyShot'] as const
+  'score', 'rescore', 'setWorkdayLogin', 'clearWorkdayLogin', 'connectGmail', 'disconnectGmail', 'addJob', 'tailor', 'saveTailored', 'revealPdf', 'prefill', 'fillAgain', 'openExternal', 'getActivity', 'stopAll', 'autoApply', 'clearAutoApplyFlag', 'saveAnswers', 'clearAllAutoApplyFlags', 'getLiveRun', 'getScheduledRun', 'skipAutoApply', 'showAutoApplyShot'] as const

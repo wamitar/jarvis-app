@@ -20,6 +20,10 @@ const scoreClass = (s: number | null): string => (s == null ? '' : s >= 75 ? ' h
 const NO_SCORES_KEY = 'jobs.ignoreScores'
 const readNoScores = (): boolean => { try { return localStorage.getItem(NO_SCORES_KEY) === '1' } catch { return false } }
 const writeNoScores = (on: boolean): void => { try { localStorage.setItem(NO_SCORES_KEY, on ? '1' : '0') } catch { /* not stored */ } }
+// "Hide flagged" (jobs auto-apply flagged stay out of the list) is remembered the same way.
+const HIDE_FLAGGED_KEY = 'jobs.hideFlagged'
+const readHideFlagged = (): boolean => { try { return localStorage.getItem(HIDE_FLAGGED_KEY) === '1' } catch { return false } }
+const writeHideFlagged = (on: boolean): void => { try { localStorage.setItem(HIDE_FLAGGED_KEY, on ? '1' : '0') } catch { /* not stored */ } }
 /** Newest first: the posting date when the source gives one, otherwise when the app found it. */
 const newest = (a: Job, b: Job): number => (b.postedAt || b.fetchedAt || '').localeCompare(a.postedAt || a.fetchedAt || '')
 
@@ -37,6 +41,8 @@ export function JobsPage({ state, jobs, selected, setSelected, reload, notify, b
   const [minScore, setMinScore] = useState(0)
   const [noScores, setNoScoresState] = useState(readNoScores)
   const setNoScores = (on: boolean): void => { setNoScoresState(on); writeNoScores(on) }
+  const [hideFlagged, setHideFlaggedState] = useState(readHideFlagged)
+  const setHideFlagged = (on: boolean): void => { setHideFlaggedState(on); writeHideFlagged(on) }
   const [adding, setAdding] = useState(false)
   const [summary, setSummary] = useState<string | null>(null)
   const [errors, setErrors] = useState<string[]>([])
@@ -45,6 +51,7 @@ export function JobsPage({ state, jobs, selected, setSelected, reload, notify, b
     if (show === 'flagged') { if (auto[j.id]?.outcome !== 'flagged' && auto[j.id]?.outcome !== 'dryrun') return false }
     else if (show === 'hidden') { if (j.status !== 'hidden') return false }
     else if (j.status === 'hidden') return false
+    else if (hideFlagged && (auto[j.id]?.outcome === 'flagged' || auto[j.id]?.outcome === 'dryrun')) return false
     else if (show === 'applied') { if (!['applied', 'interview', 'offer', 'rejected'].includes(j.status)) return false }
     else if (show === 'new' && j.status !== 'new') return false
     else if (show === 'saved' && j.status === 'new') return false
@@ -54,7 +61,7 @@ export function JobsPage({ state, jobs, selected, setSelected, reload, notify, b
     if (!noScores && minScore && (j.score ?? 0) < minScore) return false
     if (q && !`${j.title} ${j.company} ${j.location}`.toLowerCase().includes(q.toLowerCase())) return false
     return true
-  }).sort(noScores ? newest : () => 0), [jobs, q, region, site, show, minScore, noScores, auto])
+  }).sort(noScores ? newest : () => 0), [jobs, q, region, site, show, minScore, noScores, hideFlagged, auto])
   const current = jobs.find(j => j.id === selected) || null
   const filtered = !!q || show !== 'open' || region !== 'all' || site !== 'all' || minScore !== 0
   const flagCount = Object.values(auto).filter(r => r.outcome !== 'applied').length
@@ -143,6 +150,7 @@ export function JobsPage({ state, jobs, selected, setSelected, reload, notify, b
             </select>
             {!noScores && <select value={minScore} onChange={e => setMinScore(Number(e.target.value))}><option value={0}>Any match</option><option value={50}>50+</option><option value={75}>75+</option></select>}
             <label className="rowx small" title={`Hides ${ai()}'s scores and lists the newest jobs first`}><input type="checkbox" style={{ width: 'auto' }} checked={noScores} onChange={e => setNoScores(e.target.checked)} />Ignore scores</label>
+            {show !== 'flagged' && <label className="rowx small" title="Leaves jobs auto-apply flagged out of this list. They are still under Flagged by auto-apply."><input type="checkbox" style={{ width: 'auto' }} checked={hideFlagged} onChange={e => setHideFlagged(e.target.checked)} />Hide flagged</label>}
             {filtered && <button className="btn ghost sm" onClick={() => { setQ(''); setShow('open'); setRegion('all'); setSite('all'); setMinScore(0) }} title="Back to every job you have not applied to">Clear filters</button>}
             {flagCount > 0 && <button className="btn ghost sm" onClick={clearFlags} title="Removes every auto-apply mark (flagged, failed, dry run) so those jobs can be auto-applied again. Real applications are kept.">Clear {flagCount} auto-apply {flagCount === 1 ? 'mark' : 'marks'}</button>}
           </div>

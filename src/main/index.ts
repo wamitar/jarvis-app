@@ -1,7 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, nativeTheme } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell, nativeTheme, Notification } from 'electron'
 import { join } from 'node:path'
 import { rm } from 'node:fs/promises'
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { basename } from 'node:path'
 import type { AutoApplyResult, DocFile, DocKind, Job, JobStatus, PrefillResult, Profile, RawJob, RefreshProgress, Resume, SavedAnswer, Settings, Tailored, Usage, WorkdayLogin, LiveJob, LiveRun } from '../shared/types'
 import { defaultSettings, emptyProfile, emptyResume } from '../shared/types'
@@ -146,6 +146,51 @@ async function tailorJob(jobId: string, withCover: boolean): Promise<Tailored> {
       pdfPath: null, updatedAt: new Date().toISOString() }
     db.saveTailored(t)
     return t
+}
+
+// ---- Scheduled run (launchd starts the app with --scheduled-run at 9:00 and 21:00; see scripts/schedule.sh).
+// Get jobs, score them, then auto-apply to every open job that has no auto-apply mark yet (the same rule as the
+// Auto-apply button with no filters): jobs flagged before are left for the user. No daily limit.
+let autoApplyJobs: (jobIds: string[]) => Promise<{ applied: number; flagged: number; left: number }>
+const SCHEDULE_FLAG = '--scheduled-run'
+let scheduledRunning = false
+function runLog(line: string): void {
+  try { appendFileSync(join(app.getPath('userData'), 'scheduled-runs.log'), `${new Date().toISOString()}  ${line}\n`) } catch { /* logging is best effort */ }
+}
+function autoApplyTargets(): string[] {
+  const marks = db.kvGet<Record<string, AutoApplyResult>>('autoApply', {})
+  return db.listJobs().filter(j => !['applied', 'interview', 'offer', 'rejected', 'hidden'].includes(j.status) && !marks[j.id]).map(j => j.id)
+}
+async function scheduledRun(): Promise<void> {
+  if (scheduledRunning || busy) { runLog('skipped: another run was still going'); return }
+  scheduledRunning = true
+  const rec: Record<string, unknown> = { startedAt: new Date().toISOString() }
+  const save = (): void => db.kvSet('lastScheduledRun', rec)
+  const step = async <T>(name: string, label: string, fn: () => Promise<T>): Promise<T | null> => {
+    try { const r = await track(label, fn); return r }
+    catch (e) { const msg = (e as Error).message; rec[`${name}Error`] = msg; runLog(`${name} failed: ${msg}`); save(); if (e instanceof StoppedError || /^Stopped/.test(msg)) throw e; return null }
+  }
+  runLog('started')
+  try {
+    if (!hasResume(db.kvGet('resume', emptyResume()))) throw new Error('No resume in the app yet, so nothing was applied to.')
+    const r = await step('refresh', 'Getting jobs (scheduled)', () => exclusive(() => refreshJobs(settings(), progress, false)))
+    if (r) { rec.refresh = { fetched: r.fetched, added: r.added, removed: r.removed, errors: r.errors.length }; runLog(`refresh: ${r.fetched} postings, ${r.added} new`) }
+    const n = await step('score', 'Scoring jobs (scheduled)', () => exclusive(() => scorePending(settings(), progress)))
+    if (n != null) { rec.scored = n; runLog(`scored ${n}`) }
+    const targets = autoApplyTargets()
+    rec.targets = targets.length; save()
+    runLog(`auto-apply: ${targets.length} jobs`)
+    if (targets.length) {
+      const s = await step('apply', 'Auto-applying (scheduled)', () => autoApplyJobs(targets))
+      if (s) { rec.applied = s.applied; rec.flagged = s.flagged; rec.left = s.left; runLog(`auto-apply done: applied ${s.applied}, flagged ${s.flagged}, not started ${s.left}`) }
+    }
+  } catch (e) { rec.error = (e as Error).message; runLog(`stopped: ${(e as Error).message}`) }
+  finally {
+    rec.endedAt = new Date().toISOString(); save(); send('scheduledRun', rec)
+    scheduledRunning = false
+    const body = rec.error ? String(rec.error) : `Applied to ${rec.applied ?? 0}, flagged ${rec.flagged ?? 0}. ${(rec.refresh as { added?: number } | undefined)?.added ?? 0} new jobs found.`
+    if (Notification.isSupported()) new Notification({ title: 'J.A.R.V.I.S. scheduled run finished', body, silent: true }).show()
+  }
 }
 
 function handlers(): void {
@@ -294,7 +339,7 @@ function handlers(): void {
   }, 'Filling an application')
   h('getLiveRun', () => liveRun())
   h('skipAutoApply', (jobId: string) => skipCurrent(jobId))
-  h('autoApply', (jobIds: string[]) => exclusive(() => { startLive(jobIds); return runAutoApply(jobIds, {
+  autoApplyJobs = (jobIds: string[]) => exclusive(() => { startLive(jobIds); return runAutoApply(jobIds, {
     profileDir: join(app.getPath('userData'), 'apply-browser'),
     shotDir: join(app.getPath('userData'), 'autoapply'),
     hidden: settings().autoApplyWindow !== 'minimized',
@@ -338,7 +383,9 @@ function handlers(): void {
     },
     onProgress: (done, total, label) => progress({ stage: 'Auto-applying', detail: label, done, total }),
     onLive: (jobId, ev) => updateLive(jobId, ev)
-  }).finally(endLive) }), 'Auto-applying')
+  }).finally(endLive) })
+  h('autoApply', autoApplyJobs, 'Auto-applying')
+  h('getScheduledRun', () => db.kvGet('lastScheduledRun', null))
   // Clears every auto-apply mark (flagged / dry run / failed) except real applications, so those jobs can be tried again.
   h('clearAllAutoApplyFlags', () => { const all = db.kvGet<Record<string, AutoApplyResult>>('autoApply', {}); for (const k of Object.keys(all)) if (all[k].outcome !== 'applied') delete all[k]; db.kvSet('autoApply', all) })
   // Answers the user typed for questions auto-apply could not answer: kept in the profile for every later form, and the
@@ -379,6 +426,16 @@ function handlers(): void {
   h('openExternal', (url: string) => { if (/^https?:\/\//.test(url)) return shell.openExternal(url) })
 }
 
+// One copy of the app at a time: two would share the database and the application browser. A second launch (from
+// launchd with --scheduled-run, or a double-click) hands its arguments to the copy already open.
+const startedForSchedule = process.argv.includes(SCHEDULE_FLAG)
+if (!app.requestSingleInstanceLock()) app.quit()
+else app.on('second-instance', (_e, argv) => {
+  if (argv.includes(SCHEDULE_FLAG)) { void scheduledRun(); return }
+  if (!win || win.isDestroyed()) createWindow()
+  else { if (win.isMinimized()) win.restore(); win.focus() }
+})
+
 app.whenReady().then(() => {
   db.openDb(join(app.getPath('userData'), 'internship-hunter.db'))
   gmail.useStore(gmailStore)
@@ -388,7 +445,13 @@ app.whenReady().then(() => {
   setUsageListener(u => { db.kvSet('usage', u); send('usage', u) }, { ...NO_USAGE, calls: db.kvGet('aiCalls', 0), ...db.kvGet<Partial<Usage>>('usage', {}) })
   setActivityListener(a => send('activity', a))
   handlers()
-  createWindow()
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
+  // Started by the schedule: no window (the Dock icon opens one) and quit when done, unless a window was opened meanwhile.
+  if (startedForSchedule) void scheduledRun().finally(() => { if (BrowserWindow.getAllWindows().length === 0) closeBrowser().finally(() => app.quit()) })
+  else createWindow()
 })
-app.on('window-all-closed', () => { closeBrowser().finally(() => app.quit()) })
+// Closing the window quits the app, except while a scheduled run is going: that run finishes first, then quits.
+app.on('window-all-closed', () => {
+  if (scheduledRunning) { const t = setInterval(() => { if (!scheduledRunning) { clearInterval(t); if (!BrowserWindow.getAllWindows().length) closeBrowser().finally(() => app.quit()) } }, 5000); return }
+  closeBrowser().finally(() => app.quit())
+})

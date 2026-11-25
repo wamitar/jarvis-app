@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { AppState } from '../../../shared/api'
+import type { AppState, ScheduledRun } from '../../../shared/api'
 import type { Activity, AutoApplyResult, Job, LiveJob, LiveRun } from '../../../shared/types'
 import { ai } from '../ai'
 import { AnswerQuestions } from '../components/AnswerQuestions'
@@ -28,13 +28,16 @@ export function StatusPage({ state, jobs, activity, reload, openJob }: { state: 
   const [run, setRun] = useState<LiveRun | null>(null)
   const [auto, setAuto] = useState<Record<string, AutoApplyResult>>(state.autoApply || {})
   const [skipping, setSkipping] = useState('')
+  const [sched, setSched] = useState<ScheduledRun | null>(null)
   const [, tick] = useState(0)
   useEffect(() => {
     window.api.getLiveRun().then(setRun)
     const a = window.api.onLiveRun(setRun)
     const b = window.api.onAutoApply(r => setAuto(x => ({ ...x, [r.jobId]: r })))
+    window.api.getScheduledRun().then(setSched)
+    const c = window.api.onScheduledRun(r => { setSched(r); void reload() })
     const t = setInterval(() => tick(n => n + 1), 5000)   // keeps "x min ago" and timers fresh
-    return () => { a(); b(); clearInterval(t) }
+    return () => { a(); b(); c(); clearInterval(t) }
   }, [])
   useEffect(() => { setAuto(state.autoApply || {}) }, [state.autoApply])
 
@@ -79,6 +82,11 @@ export function StatusPage({ state, jobs, activity, reload, openJob }: { state: 
         ) : (
           <div className="now"><span className="lamp" /><div className="muted">Idle.{run?.endedAt ? ` The last auto-apply run ended ${when(run.endedAt)}: ${run.jobs.filter(j => j.state === 'applied').length} submitted, ${run.jobs.filter(j => j.state === 'flagged').length} need you${run.jobs.some(j => j.state === 'skipped') ? `, ${run.jobs.filter(j => j.state === 'skipped').length} not reached` : ''}.` : ' Start auto-apply from the Jobs page and follow it here.'}</div></div>
         )}
+        <div className="muted small" style={{ marginTop: 8 }}>Runs on its own at 9:00 and 21:00 (get jobs, score, auto-apply to every job not yet tried).{sched
+          ? sched.endedAt
+            ? ` Last scheduled run ${when(sched.endedAt)}: ${sched.error ? sched.error : `${sched.refresh?.added ?? 0} new jobs, ${sched.applied ?? 0} submitted, ${sched.flagged ?? 0} need you${sched.refreshError || sched.scoreError || sched.applyError ? ` (problem: ${sched.refreshError || sched.scoreError || sched.applyError})` : ''}.`}`
+            : ` A scheduled run started ${when(sched.startedAt)} and is still going.`
+          : ' No scheduled run yet.'}</div>
       </div>
 
       {run && run.jobs.length > 0 && (
