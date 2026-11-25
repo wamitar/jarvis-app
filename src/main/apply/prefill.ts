@@ -8,6 +8,7 @@ import { chromium, type BrowserContext, type Frame, type Locator, type Page } fr
 import type { DocFile, Job, PrefillResult, Profile, Resume, Tailored } from '../../shared/types'
 import { documentFor } from '../docs'
 import { resumeToText } from '../../shared/types'
+import { regionOf } from '../filter'
 import { aiName, askJson } from '../ai/claude'
 
 let context: BrowserContext | null = null
@@ -663,7 +664,12 @@ type Rule = [RegExp, (p: Profile, job: Job) => string]
 export function eligibilityFor(job: Job, p: Profile): { country: string; authorized: string; sponsorship: string } {
   if (job.region === 'usa') return { country: 'United States', authorized: p.workAuthUsa, sponsorship: p.sponsorshipUsa }
   if (job.region === 'uk') return { country: 'United Kingdom', authorized: p.workAuthUk, sponsorship: p.sponsorshipUk }
-  return { country: 'Canada', authorized: p.workAuthCanada, sponsorship: p.needsSponsorship }
+  if (job.region === 'ontario' || job.region === 'canada') return { country: 'Canada', authorized: p.workAuthCanada, sponsorship: p.needsSponsorship }
+  // Anywhere else the candidate holds no work right and needs a visa. A job whose place is unknown keeps the Canadian answers.
+  const town = `${job.location} ${job.title}`
+  const country = /italy|maranello|faenza/i.test(town) ? 'Italy' : /switzerland|hinwil/i.test(town) ? 'Switzerland' : /france|ch[aâ]tillon/i.test(town) ? 'France' : regionOf(job.location) === 'other' ? job.location : ''
+  if (!country) return { country: 'Canada', authorized: p.workAuthCanada, sponsorship: p.needsSponsorship }
+  return { country, authorized: 'No', sponsorship: 'Yes' }
 }
 /** Plain mapping, used when Claude is unavailable. */
 const RULES: Rule[] = [
@@ -847,7 +853,7 @@ Today is ${today}.
 
 <candidate_facts>
 ${JSON.stringify(facts, null, 1)}
-Work eligibility, by country: Canada: authorized ${yn(workAuthCanada)}, needs sponsorship ${yn(needsSponsorship)}. United States: authorized ${yn(workAuthUsa)}, needs sponsorship ${yn(sponsorshipUsa)}. United Kingdom: authorized ${yn(workAuthUk)}, needs sponsorship ${yn(sponsorshipUk)}.
+Work eligibility, by country: Canada: authorized ${yn(workAuthCanada)}, needs sponsorship ${yn(needsSponsorship)}. United States: authorized ${yn(workAuthUsa)}, needs sponsorship ${yn(sponsorshipUsa)}. United Kingdom: authorized ${yn(workAuthUk)}, needs sponsorship ${yn(sponsorshipUk)}. Any other country: authorized No, needs sponsorship Yes.
 This job is in ${elig.country}: authorized to work there: ${yn(elig.authorized)}; needs visa sponsorship there: ${yn(elig.sponsorship)}.
 Voluntary self-identification chosen by the candidate: ${eeoText(profile)}.
 Other facts from the candidate: ${extra || '(none)'}

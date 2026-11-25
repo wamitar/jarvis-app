@@ -2,6 +2,7 @@
 // UKG (UltiPro) job boards, BambooHR and Workable. All read public pages or feeds; none needs a login.
 import type { Board, RawJob } from '../../shared/types'
 import { UA, getJson, htmlToText, decodeEntities } from './util'
+import { regionOf } from '../filter'
 
 const QUERIES = ['intern', 'co-op', 'student']
 const BROWSER = { ...UA, 'user-agent': `Mozilla/5.0 (Macintosh) ${UA['user-agent']}` }
@@ -15,7 +16,7 @@ async function getHtml(url: string): Promise<string> {
 /** SuccessFactors career site search pages. id = host, e.g. jobs.bombardier.com. */
 export async function fetchSuccessFactors(b: Board): Promise<RawJob[]> {
   const seen = new Map<string, RawJob>()
-  for (const q of QUERIES) {
+  for (const q of b.queries ?? QUERIES) {
     for (let start = 0; start < 75; start += 25) {
       const html = await getHtml(`https://${b.id}/search/?q=${encodeURIComponent(q)}&startrow=${start}`)
       // Two layouts exist: a table (one <tr class="data-row"> per job) and tiles (one <li class="job-tile"> per job).
@@ -34,6 +35,9 @@ export async function fetchSuccessFactors(b: Board): Promise<RawJob[]> {
           const ca = slug.match(/-(ON|QC|BC|AB|MB|SK|NS|NB|NL|PE)(?:-[A-Z]\d[A-Z]-\d[A-Z]\d)?$/), us = slug.match(/-([A-Z]{2})-\d{5}$/)
           if (ca) loc = `${slug.split('-')[0]}, ${ca[1]}, CA`; else if (us) loc = `${slug.split('-')[0]}, ${us[1]}, US`
         }
+        // Ferrari leaves the location empty and puts the town in the title: "Accounting Internship (Maranello)".
+        // Only a recognised place counts ("(Remote)" does not); otherwise the board's home town is used.
+        if (!loc) { const paren = decodeEntities(htmlToText(link[2])).match(/\(([^()]+)\)\s*$/)?.[1] || ''; loc = regionOf(paren) !== 'unknown' ? paren : b.defaultLocation || '' }
         const date = new Date(htmlToText(row.match(/class="jobDate"[^>]*>\s*([^<]+)</)?.[1] || ''))
         const url = `https://${b.id}${decodeEntities(path)}`
         seen.set(postId, {

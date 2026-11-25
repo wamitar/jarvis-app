@@ -75,10 +75,10 @@ export function JobsPage({ state, jobs, selected, setSelected, reload, notify, b
     } catch (e) { await reload(); notify(errText(e), true) }
   }
 
-  const refresh = async (): Promise<void> => {
+  const refresh = async (recheckRejected = false): Promise<void> => {
     setSummary(null); setErrors([])
     try {
-      const r = await window.api.refresh()
+      const r = await window.api.refresh(recheckRejected)
       await reload()
       setSummary(`Checked ${r.fetched.toLocaleString()} postings. ${r.passed} matched your rules and ${r.added} ${r.added === 1 ? 'is' : 'are'} new.${r.removed ? ` ${r.removed} older ${r.removed === 1 ? 'job was' : 'jobs were'} removed because ${r.removed === 1 ? 'it no longer fits' : 'they no longer fit'} your rules (location, U.S. persons only, or term length).` : ''} Nothing was sent to ${ai()}: press Score when you want match scores.`)
       setErrors(r.errors)
@@ -108,7 +108,8 @@ export function JobsPage({ state, jobs, selected, setSelected, reload, notify, b
             {!noScores && <button className="btn" onClick={score} disabled={busy || !unscored || !state.hasResume} title={state.hasResume ? `About ${Math.ceil(unscored / 15)} ${ai()} calls` : 'Add your resume first'}>
               {unscored ? `Score ${unscored} unscored ${unscored === 1 ? 'job' : 'jobs'} with ${ai()}` : 'All jobs scored'}</button>}
             <button className="btn" onClick={() => setConfirmAuto(true)} disabled={busy || !autoTargets.length || !state.hasResume} title="Tailors, fills and submits every job under the current filters">Auto-apply to {autoTargets.length} {autoTargets.length === 1 ? 'job' : 'jobs'}</button>
-            <button className="btn primary" onClick={refresh} disabled={busy}>{busy && <span className="spin" />}{busy ? 'Working…' : 'Get jobs'}</button>
+            <button className="btn" onClick={() => refresh(true)} disabled={busy} title="Gets jobs and also re-reads postings turned down in the last two weeks, against your current profile and rules. Slower than Get jobs.">Recheck rejected</button>
+            <button className="btn primary" onClick={() => refresh()} disabled={busy}>{busy && <span className="spin" />}{busy ? 'Working…' : 'Get jobs'}</button>
           </div>
         </div>
         {!state.hasResume && !noScores && <div className="banner info"><span>Add your resume so {ai()} can score how well each job fits you.</span><button className="btn sm" onClick={() => go('resume')}>Add resume</button></div>}
@@ -135,7 +136,7 @@ export function JobsPage({ state, jobs, selected, setSelected, reload, notify, b
           <div className="filters">
             <input placeholder="Search title, company, place" value={q} onChange={e => setQ(e.target.value)} />
             <select value={show} onChange={e => setShow(e.target.value as typeof show)}><option value="open">Not applied yet</option><option value="new">New only</option><option value="saved">Saved or tailored</option><option value="applied">Applied</option><option value="flagged">Flagged by auto-apply</option><option value="hidden">Hidden (not interested)</option></select>
-            <select value={region} onChange={e => setRegion(e.target.value)}><option value="all">Everywhere</option><option value="ontario">Ontario</option><option value="canada">Rest of Canada</option><option value="usa">USA</option><option value="uk">UK</option></select>
+            <select value={region} onChange={e => setRegion(e.target.value)}><option value="all">Everywhere</option><option value="ontario">Ontario</option><option value="canada">Rest of Canada</option><option value="usa">USA</option><option value="uk">UK</option><option value="other">Europe / other</option></select>
             <select value={site} onChange={e => setSite(e.target.value)} title="The job site the application is on">
               <option value="all">Any site</option>
               {[...Object.keys(SITE_LABEL), 'other'].filter(k => jobs.some(j => siteOf(j) === k)).map(k => <option key={k} value={k}>{SITE_LABEL[k] || 'Other sites'}</option>)}

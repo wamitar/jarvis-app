@@ -24,7 +24,7 @@ export interface Api {
   listJobs(): Promise<Job[]>
   getJob(id: string): Promise<{ job: Job; tailored: Tailored | null } | null>
   updateJob(id: string, patch: { status?: JobStatus; notes?: string }): Promise<void>
-  refresh(): Promise<RefreshResult>
+  refresh(recheckRejected?: boolean): Promise<RefreshResult>
   score(): Promise<number>
   rescore(): Promise<number>
   setWorkdayLogin(email: string, password: string): Promise<WorkdayLogin>

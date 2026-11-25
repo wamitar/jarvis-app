@@ -39,7 +39,16 @@ const ALIAS: Record<string, string> = {
   raytheon: 'RTX (Collins, Pratt & Whitney, Raytheon)', rtx: 'RTX (Collins, Pratt & Whitney, Raytheon)',
   'ge healthcare': 'GE HealthCare', 'leonardo drs': 'Leonardo DRS', 'p and g': 'Procter & Gamble', 'procter and gamble': 'Procter & Gamble',
   'westinghouse electric': 'Westinghouse', 'keysight': 'Keysight', 'on semiconductor': 'onsemi', 'amazon robotics': 'Amazon',
-  'amazon web services': 'Amazon', aws: 'Amazon', 'google deepmind': 'Google', 'tesla motors': 'Tesla', 'blue origin': 'Blue Origin'
+  'amazon web services': 'Amazon', aws: 'Amazon', 'google deepmind': 'Google', 'tesla motors': 'Tesla', 'blue origin': 'Blue Origin',
+  // Formula 1 teams. "Red Bull Technology" is left out: its key is plain "red bull", the drinks company.
+  'oracle red bull racing': 'Red Bull Racing', 'red bull powertrains': 'Red Bull Racing', 'mclaren racing': 'McLaren', 'mclaren f1': 'McLaren',
+  'mercedes amg': 'Mercedes-AMG Petronas F1', 'mercedes amg f1': 'Mercedes-AMG Petronas F1', 'mercedes amg petronas': 'Mercedes-AMG Petronas F1',
+  'mercedes amg petronas formula one team': 'Mercedes-AMG Petronas F1', 'williams f1': 'Williams Racing', 'atlassian williams racing': 'Williams Racing',
+  'aston martin aramco': 'Aston Martin F1', 'aston martin aramco f1 team': 'Aston Martin F1', 'scuderia ferrari': 'Ferrari',
+  'moneygram haas f1 team': 'Haas F1 Team', 'haas f1': 'Haas F1 Team', 'visa cash app rb': 'Racing Bulls', vcarb: 'Racing Bulls',
+  'bwt alpine f1 team': 'Alpine F1', 'alpine racing': 'Alpine F1', sauber: 'Audi F1 (Sauber)', 'stake f1 team': 'Audi F1 (Sauber)',
+  'audi f1 team': 'Audi F1 (Sauber)', 'sauber motorsport': 'Audi F1 (Sauber)', 'cadillac formula 1 team': 'Cadillac F1', 'cadillac f1 team': 'Cadillac F1',
+  'twg motorsports': 'Cadillac F1'
 }
 export const canonicalCompany = (name: string): string => { const k = companyKey(name); return ALIAS[k] || CANON.get(k) || name.trim() }
 

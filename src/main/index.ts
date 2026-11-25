@@ -19,6 +19,7 @@ import { htmlToPdf, letterHtml, resumeHtml, safeName } from './resume/render'
 import { refreshJobs, scorePending } from './refresh'
 import { allBoards, setDiscoveredBoards } from './sources'
 import { UA, htmlToText, siteFetch } from './sources/util'
+import { canonicalCompany } from './sources/simplify'
 import { regionOf, setRulesFromProfile, textProblem } from './filter'
 import { closeBrowser, fillAgain, prefill, stopWatching, useDocuments, type WorkdayHooks } from './apply/prefill'
 import { addDocuments, removeDocumentFile } from './docs'
@@ -211,7 +212,7 @@ function handlers(): void {
   h('listJobs', () => db.listJobs())
   h('getJob', (id: string) => { const job = db.getJob(id); return job ? { job, tailored: db.getTailored(id) } : null })
   h('updateJob', (id: string, patch: { status?: JobStatus; notes?: string }) => db.updateJob(id, patch))
-  h('refresh', () => exclusive(() => refreshJobs(settings(), progress)), 'Getting jobs')
+  h('refresh', (recheckRejected?: boolean) => exclusive(() => refreshJobs(settings(), progress, !!recheckRejected)), 'Getting jobs')
   h('score', () => exclusive(() => scorePending(settings(), progress)), 'Scoring jobs')
   h('rescore', () => exclusive(async () => { db.clearScores(); return scorePending(settings(), progress) }), 'Scoring jobs')
 
@@ -232,9 +233,10 @@ function handlers(): void {
     if (!info.title || !info.description) throw new Error(`${aiName()} could not find a job posting in that text.`)
     // A pasted posting meets the same rules as the ones the app finds.
     setRulesFromProfile({ ...emptyProfile(), ...db.kvGet('profile', emptyProfile()) })
-    const why = textProblem(info.title, info.description, regionOf(info.location || ''))
+    const company = canonicalCompany(info.company || '') || 'Unknown employer'
+    const why = textProblem(info.title, info.description, regionOf(info.location || ''), company)
     if (why) throw new Error(`Not added: ${info.company || 'this posting'} – ${info.title} is a ${why.replace(/^U\.S\. persons only/, 'U.S.-persons-only role')}.`)
-    const raw: RawJob = { id: `manual:manual:${Date.now()}`, source: 'manual', company: info.company || 'Unknown employer', title: info.title,
+    const raw: RawJob = { id: `manual:manual:${Date.now()}`, source: 'manual', company, title: info.title,
       location: info.location || '', url: url || '', applyUrl: url || '', description: info.description, postedAt: null, big: true }
     const region = regionOf(raw.location)
     if (!db.insertJob(raw, region === 'unknown' ? 'other' : region)) throw new Error('That job is already in your list.')

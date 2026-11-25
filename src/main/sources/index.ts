@@ -1,6 +1,7 @@
 import type { Board, RawJob, Settings } from '../../shared/types'
 import { BOARDS } from '../companies'
 import { fetchGreenhouse } from './greenhouse'
+import { fetchPinpoint } from './pinpoint'
 import { fetchLever } from './lever'
 import { fetchAshby } from './ashby'
 import { fetchWorkday, fetchWorkdayDetail } from './workday'
@@ -20,7 +21,7 @@ export interface FetchOutcome { jobs: RawJob[]; errors: string[] }
 const FETCHERS: Record<Board['ats'], (b: Board) => Promise<RawJob[]>> = {
   greenhouse: fetchGreenhouse, lever: fetchLever, ashby: fetchAshby, workday: fetchWorkday,
   amazon: fetchAmazon, google: fetchGoogle, apple: fetchApple, eightfold: fetchEightfold, oracle: fetchOracle, smartrecruiters: fetchSmartRecruiters, jibe: fetchJibe,
-  successfactors: fetchSuccessFactors, ukg: fetchUkg, bamboohr: fetchBambooHr, workable: fetchWorkable
+  successfactors: fetchSuccessFactors, ukg: fetchUkg, bamboohr: fetchBambooHr, workable: fetchWorkable, pinpoint: fetchPinpoint
 }
 
 export const FETCHERS_FOR_TEST = FETCHERS
@@ -63,7 +64,9 @@ export async function fetchAll(settings: Settings, onProgress: (done: number, to
     if (b.ats === 'workday' && now - (workdayReadAt[key] || 0) < WORKDAY_REREAD_MS) { tick(`${b.company} (read recently)`); return }
     if (b.ats === 'workday' && workdayRefusals >= WORKDAY_BACK_OFF) { tick(`${b.company} (Workday busy, next time)`); return }
     try {
-      jobs.push(...await withTimeout(FETCHERS[b.ats](b), BOARD_LIMIT_MS, b.company))
+      const got = await withTimeout(FETCHERS[b.ats](b), BOARD_LIMIT_MS, b.company)
+      const keep = b.titleFilter ? new RegExp(b.titleFilter, 'i') : null
+      jobs.push(...(keep ? got.filter(j => keep.test(j.title)) : got))
       if (b.ats === 'workday') { workdayReadAt[key] = Date.now(); workdayRefusals = 0 }
     } catch (e) {
       if (b.ats === 'workday' && e instanceof RateLimited && ++workdayRefusals === WORKDAY_BACK_OFF)
@@ -104,7 +107,7 @@ export async function fetchDetail(j: RawJob): Promise<{ description: string; loc
     const text = await postingText(j).then(t => (t.length > 400 ? t : '')).catch(() => '')
     return { description: text || `${j.title}\n\n(The app could not read this posting's text automatically. Open the link to see the full posting.)`, location: j.location }
   }
-  if (j.source === 'linkedin') return { description: j.description, location: j.location }
+  if (j.source === 'linkedin' || j.source === 'pinpoint') return { description: j.description, location: j.location }
   if (j.detailUrl) {
     const read = j.source === 'eightfold' ? eightfoldDetail : j.source === 'oracle' ? oracleDetail : j.source === 'successfactors' ? successFactorsDetail
       : j.source === 'bamboohr' ? bambooHrDetail : j.source === 'workable' ? workableDetail : smartRecruitersDetail

@@ -25,7 +25,7 @@ export async function scorePending(settings: Settings, progress: (p: RefreshProg
   })
 }
 
-export async function refreshJobs(settings: Settings, progress: (p: RefreshProgress) => void): Promise<RefreshResult> {
+export async function refreshJobs(settings: Settings, progress: (p: RefreshProgress) => void, recheckRejected = false): Promise<RefreshResult> {
   const result: RefreshResult = { fetched: 0, passed: 0, added: 0, scored: 0, removed: 0, errors: [] }
   setRulesFromProfile({ ...emptyProfile(), ...db.kvGet('profile', emptyProfile()) })
   setDiscoveredBoards(db.kvGet<Board[]>('discoveredBoards', []))
@@ -49,10 +49,11 @@ export async function refreshJobs(settings: Settings, progress: (p: RefreshProgr
   result.fetched = jobs.length
   result.errors = errors
 
-  // Postings read and turned down in the last two weeks are not read again (most of a refresh's time otherwise).
+  // Postings read and turned down in the last two weeks are not read again (most of a refresh's time otherwise),
+  // unless the user asked to recheck them (Jobs › Recheck rejected, after changing what they want).
   const REREAD_AFTER = 14 * 86400_000
   const now = Date.now()
-  const rejected = Object.fromEntries(Object.entries(db.kvGet<Record<string, number>>('rejectedPostings', {})).filter(([, at]) => now - at < REREAD_AFTER))
+  const rejected = Object.fromEntries(Object.entries(recheckRejected ? {} : db.kvGet<Record<string, number>>('rejectedPostings', {})).filter(([, at]) => now - at < REREAD_AFTER))
   const fresh = jobs.filter(j => !rejected[j.id] && !db.hasJob(j))
   const direct: { j: RawJob; region: Job['region'] }[] = []
   const needDetail: RawJob[] = []
@@ -89,7 +90,7 @@ export async function refreshJobs(settings: Settings, progress: (p: RefreshProgr
     } catch (e) { result.errors.push(`LinkedIn jobs on employer sites: ${(e as Error).message.slice(0, 160)}`) }
   }
 
-  result.removed = db.pruneJobs(r => (r.region !== 'usa' || (usAllowed(r.company, r.location) && !US_DEFENSE.has(r.company))) && (r.region !== 'uk' || ukAllowed(r.company)) && !(r.description && textProblem(r.title, r.description, r.region)))
+  result.removed = db.pruneJobs(r => (r.region !== 'usa' || (usAllowed(r.company, r.location) && !US_DEFENSE.has(r.company))) && (r.region !== 'uk' || ukAllowed(r.company)) && !(r.description && textProblem(r.title, r.description, r.region, r.company)))
 
   // Per-company record of this run, so the user can see a company was searched even when nothing matched.
   const stored = db.countByCompany()

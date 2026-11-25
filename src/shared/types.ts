@@ -1,6 +1,6 @@
 export type Region = 'ontario' | 'canada' | 'usa' | 'uk' | 'other'
 export type JobStatus = 'new' | 'saved' | 'tailored' | 'applied' | 'interview' | 'offer' | 'rejected' | 'hidden'
-export type BoardAts = 'greenhouse' | 'lever' | 'ashby' | 'workday' | 'amazon' | 'google' | 'apple' | 'eightfold' | 'oracle' | 'smartrecruiters' | 'jibe' | 'successfactors' | 'ukg' | 'bamboohr' | 'workable'
+export type BoardAts = 'greenhouse' | 'lever' | 'ashby' | 'workday' | 'amazon' | 'google' | 'apple' | 'eightfold' | 'oracle' | 'smartrecruiters' | 'jibe' | 'successfactors' | 'ukg' | 'bamboohr' | 'workable' | 'pinpoint'
 export type Ats = BoardAts | 'jobbank' | 'adzuna' | 'manual' | 'simplify' | 'linkedin'
 
 export interface RawJob {
@@ -34,6 +34,10 @@ export interface Board {
   ats: BoardAts
   id: string            // board token; workday "tenant|wdN|site"; eightfold "host|domain|flavour"; oracle "host|site"
   big: boolean
+  queries?: string[]      // search words (oracle, smartrecruiters, successfactors); a default list is used when absent
+  countries?: string[]    // smartrecruiters country codes
+  titleFilter?: string    // regex source, case-insensitive: only jobs whose title matches are kept
+  defaultLocation?: string  // used when a posting gives no recognisable place (SuccessFactors)
 }
 
 export interface Resume {

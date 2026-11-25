@@ -1,14 +1,14 @@
 import type { RawJob, Region } from '../shared/types'
-import { KNOWN, US_DEFENSE } from './companies'
+import { KNOWN, MOTORSPORT, US_DEFENSE } from './companies'
 
 const ONTARIO = /\b(ontario|toronto|ottawa|mississauga|brampton|hamilton|waterloo|kitchener|cambridge, on|london, on|markham|vaughan|oakville|burlington|oshawa|windsor, on|guelph|kingston, on|barrie|sudbury|thunder bay|st\.? catharines|niagara|richmond hill|ajax|pickering|whitby|milton, on|kanata|peterborough|sarnia|woodstock, on|alliston|ingersoll|aurora, on|newmarket|concord, on|etobicoke|scarborough|north york|stoney creek|brantford|chatham|belleville|cornwall, on|bolton, on|tiverton|chalk river|clarington|darlington|gta)\b|,\s*ON\b|\bON,\s*(CA|CAN|Canada)\b/i
 const CANADA = /\b(canada|quebec|québec|montreal|montréal|british columbia|vancouver|alberta|calgary|edmonton|manitoba|winnipeg|saskatchewan|saskatoon|regina|nova scotia|halifax|new brunswick|newfoundland|victoria, bc|burnaby|richmond, bc|laval|longueuil|mirabel|saint-laurent|dorval)\b|,\s*(QC|BC|AB|MB|SK|NS|NB|NL|PE)\b|\bCAN\b/i
 const US_STATES = 'AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC'
 const US_NAMES = 'alabama alaska arizona arkansas california colorado connecticut delaware florida georgia hawaii idaho illinois indiana iowa kansas kentucky louisiana maine maryland massachusetts michigan minnesota mississippi missouri montana nebraska nevada new hampshire|new jersey|new mexico|new york|north carolina|north dakota|ohio oklahoma oregon pennsylvania rhode island|south carolina|south dakota|tennessee texas utah vermont virginia washington west virginia|wisconsin wyoming'
 const USA = new RegExp(`\\b(united states|usa|u\\.s\\.a?\\.?|us-[a-z]{2}|${US_NAMES.replace(/ (?![a-z]+\|)/g, '|')})\\b|,\\s*(${US_STATES.split(' ').join('|')})\\b|\\bUS\\b|\\b(${US_STATES.split(' ').join('|')})\\s*-\\s|\\bUS,|-\\s*US\\b`, 'i')
-const ELSEWHERE = /\b(india|china|japan|korea|germany|france|united kingdom|uk|england|ireland|mexico|brazil|singapore|taiwan|israel|poland|netherlands|australia|new zealand|italy|spain|sweden|switzerland|malaysia|philippines|vietnam|thailand|czech|hungary|romania|austria|belgium|denmark|norway|finland|portugal|turkey|uae|dubai|saudi|egypt|south africa|costa rica|colombia|argentina|chile|bangalore|bengaluru|hyderabad|pune|chennai|shanghai|beijing|shenzhen|tokyo|munich|berlin|paris|london, (uk|england)|penang|auckland|armenia|yerevan|georgia, (ge|tbilisi)|tbilisi|bulgaria|croatia|estonia|latvia|lithuania|slovenia|iceland|cyprus|malta|luxembourg|slovakia|taipei|tel aviv|haifa|dublin|eemshaven|hong kong|indonesia|qatar|serbia|greece|ukraine|peru|morocco|kenya|nigeria|pakistan|bangladesh|sri lanka)\b/i
+const ELSEWHERE = /\b(india|china|japan|korea|germany|france|united kingdom|uk|england|ireland|mexico|brazil|singapore|taiwan|israel|poland|netherlands|australia|new zealand|italy|spain|sweden|switzerland|malaysia|philippines|vietnam|thailand|czech|hungary|romania|austria|belgium|denmark|norway|finland|portugal|turkey|uae|dubai|saudi|egypt|south africa|costa rica|colombia|argentina|chile|bangalore|bengaluru|hyderabad|pune|chennai|shanghai|beijing|shenzhen|tokyo|munich|berlin|paris|london, (uk|england)|penang|auckland|armenia|yerevan|georgia, (ge|tbilisi)|tbilisi|bulgaria|croatia|estonia|latvia|lithuania|slovenia|iceland|cyprus|malta|luxembourg|slovakia|taipei|tel aviv|haifa|dublin|eemshaven|hong kong|indonesia|qatar|serbia|greece|ukraine|peru|morocco|kenya|nigeria|pakistan|bangladesh|sri lanka|maranello|faenza|hinwil|viry-ch[aâ]tillon)\b/i
 // United Kingdom. A UK job is kept only at a well-known employer (KNOWN), the same bar as US jobs outside the four key areas.
-const UK = /\b(united kingdom|great britain|england|scotland|(?<!new south )wales|northern ireland|london|manchester|birmingham|bristol|derby|coventry|sheffield|leeds|glasgow|edinburgh|belfast|filton|broughton|swindon|milton keynes|gaydon|solihull|whitley|crewe|woking|silverstone|brackley|malmesbury|hullavington|culham|abingdon|stevenage|southampton|nottingham|liverpool|cardiff|aberdeen|newcastle upon tyne|sunderland|cambridge,\s*(uk|england|gb)|oxford,\s*(uk|england|gb)|reading,\s*(uk|england|berkshire))\b|\b(UK|GB|GBR)\b/i
+const UK = /\b(united kingdom|great britain|england|scotland|(?<!new south )wales|northern ireland|london|manchester|birmingham|bristol|derby|coventry|sheffield|leeds|glasgow|edinburgh|belfast|filton|broughton|swindon|milton keynes|gaydon|solihull|whitley|crewe|woking|silverstone|brackley|malmesbury|hullavington|culham|abingdon|stevenage|southampton|nottingham|liverpool|cardiff|aberdeen|newcastle upon tyne|sunderland|cambridge,\s*(uk|england|gb)|oxford,\s*(uk|england|gb)|reading,\s*(uk|england|berkshire)|enstone|banbury|brixworth|bicester|grove,\s*(oxfordshire|uk|england|gb|wantage))\b|\b(UK|GB|GBR)\b/i
 // Three-letter country codes, as Amazon and Boeing write them ("Luxembourg, LUX", "GBR - Hounslow").
 const ISO3_ELSEWHERE = /\b(SGP|LUX|DEU|ITA|POL|IND|JPN|CHN|FRA|ESP|MEX|BRA|AUS|IRL|NLD|ISR|KOR|TWN|CZE|ROU|CRI|ARE|SAU|ZAF|QAT|MYS|PHL|SWE|CHE|BEL|AUT|TUR|EGY|COL|ARG|CHL|SVK|HUN|PRT|DNK|NOR|FIN|NZL|VNM|THA|IDN|HKG|SRB|GRC|UKR|BGR|JOR|BHR|KWT|OMN|MAR)\b/
 
@@ -64,19 +64,21 @@ export function durations(text: string, needContext = true): [number, number][] 
   return out
 }
 /** Why a posting's term length rules it out, or '' when it fits or says nothing about length. */
-export function termProblem(title: string, description: string): string {
+export function termProblem(title: string, description: string, company = ''): string {
+  // F1 teams hire year-long placements, so the candidate's 12-month term is wanted there.
+  const f1 = MOTORSPORT.has(company)
   // PEY (Professional Experience Year) is a 12 to 16 month placement.
-  if (/\bPEY\b|professional experience year/i.test(title)) return 'PEY placement (12 to 16 months)'
+  if (!f1 && /\bPEY\b|professional experience year/i.test(title)) return 'PEY placement (12 to 16 months)'
   // UK placement years (sandwich year, year in industry) run about 12 months.
-  if (/placement year|year[- ]in[- ]industry|industrial placement|sandwich (year|placement)|year[- ]long placement/i.test(title)) return 'UK placement year (about 12 months)'
+  if (!f1 && /placement year|year[- ]in[- ]industry|industrial placement|sandwich (year|placement)|year[- ]long placement/i.test(title)) return 'UK placement year (about 12 months)'
   const stated = [...durations(title, false), ...durations(description)]
   if (!stated.length) return ''
   // A posting fits when any length it offers overlaps the wanted range (16 weeks counts as 4 months).
   // A 12-week summer internship is always wanted too, whatever the range says.
-  const min = Math.min(TERM.min, SUMMER_WEEKS / 4.33)
-  if (stated.some(([lo, hi]) => hi >= min - 0.05 && lo <= TERM.max + 0.35)) return ''
+  const min = Math.min(TERM.min, SUMMER_WEEKS / 4.33), max = f1 ? Math.max(TERM.max, 13) : TERM.max
+  if (stated.some(([lo, hi]) => hi >= min - 0.05 && lo <= max + 0.35)) return ''
   const shown = stated[0][0] === stated[0][1] ? `${stated[0][0]}` : `${stated[0][0]} to ${stated[0][1]}`
-  return `${shown}-month term, outside 12 weeks to ${TERM.max} months`
+  return `${shown}-month term, outside 12 weeks to ${max} months`
 }
 
 // ---- U.S.-person-only roles (export control, ITAR, clearance, citizenship or permanent residence required).
@@ -104,9 +106,9 @@ export function usPersonOnly(text: string): string {
   return ''
 }
 // ---- Visa sponsorship. In a country where the profile says the candidate needs sponsorship, postings that refuse it are dropped.
-export const NEEDS_SPONSOR = { canada: false, usa: false, uk: false }
+export const NEEDS_SPONSOR = { canada: false, usa: false, uk: false, other: true }
 type SponsorCountry = keyof typeof NEEDS_SPONSOR
-const countryOf = (region: string): SponsorCountry | null => (region === 'ontario' || region === 'canada' ? 'canada' : region === 'usa' ? 'usa' : region === 'uk' ? 'uk' : null)
+const countryOf = (region: string): SponsorCountry | null => (region === 'ontario' || region === 'canada' ? 'canada' : region === 'usa' ? 'usa' : region === 'uk' ? 'uk' : region === 'other' ? 'other' : null)
 /** Loads the profile's term length and per-country sponsorship answers into the filter. */
 export function setRulesFromProfile(p: { termLength?: string; needsSponsorship?: string; sponsorshipUsa?: string; sponsorshipUk?: string }): void {
   setTermFromProfile(p.termLength || '')
@@ -137,11 +139,11 @@ export function noSponsorship(text: string): string {
 }
 
 /** Rules that need the posting's own text: citizens only, visa sponsorship (when the region is known) and term length. */
-export function textProblem(title: string, description: string, region = ''): string {
+export function textProblem(title: string, description: string, region = '', company = ''): string {
   if (usPersonOnly(`${title}\n${description}`)) return 'citizens only (U.S. export control, citizenship or clearance, or UK nationality or clearance)'
   const c = countryOf(region)
   if (c && NEEDS_SPONSOR[c] && noSponsorship(description)) return 'does not sponsor work visas'
-  return termProblem(title, description)
+  return termProblem(title, description, company)
 }
 
 // A US state code after the city ("Burlington, MA", "Vancouver, WA", "London, KY") settles the country, even when
@@ -165,12 +167,12 @@ function regionOne(loc: string): Region | 'unknown' {
   return 'unknown'
 }
 
-const INTERN = /\b(intern|interns|internship|internships|co-?op|student|summer (20\d\d|term|analyst|associate)|pey|stagiaire|apprentice)\b/i
+const INTERN = /\b(intern|interns|internship|internships|co-?op|student|summer (20\d\d|term|analyst|associate)|pey|stagiaire|apprentice|placement|placements)\b/i
 export const isInternTitle = (title: string): boolean => INTERN.test(title.replace(NOT_INTERN, ''))
 const NOT_INTERN = /\b(manager of interns|internal|international)\b/i
-const ME_TITLE = /\b(mechanical|mechatronics?|manufacturing|thermal|thermo|fluids?|structures?|structural|propulsion|aerospace|aeronautical|robotics?|hardware|design eng|product design|test eng|materials?|quality eng|process eng|industrial eng|automation|tooling|cad|mechanisms?|vehicle|powertrain|chassis|battery|hvac|reliability|systems eng|production eng|build eng|integration|launch|avionics mech|nuclear|energy|equipment|facilities eng|r&d|research and development|product development|engineering)\b/i
+const ME_TITLE = /\b(mechanical|mechatronics?|manufacturing|thermal|thermo|fluids?|structures?|structural|propulsion|aerospace|aeronautical|robotics?|hardware|design eng|product design|test eng|materials?|quality eng|process eng|industrial eng|automation|tooling|cad|mechanisms?|vehicle|powertrain|chassis|battery|hvac|reliability|systems eng|production eng|build eng|integration|launch|avionics mech|nuclear|energy|equipment|aero|aerodynamics?|aerodynamicist|composites?|vehicle dynamics|race eng|performance eng|trackside|suspension|gearbox|drivetrain|wind tunnel|facilities eng|r&d|research and development|product development|engineering)\b/i
 const OFF_TITLE = /\b(software|firmware|data sci|data eng|data analy|machine learning|\bml\b|\bai\b|finance|financial|accounting|marketing|legal|recruit|talent|human resources|\bhr\b|sales|business|supply chain|procurement|communications|design (ux|ui)|ux|ui|graphic|security eng|it support|information technology|cyber|web|cloud|devops|backend|frontend|full.?stack|electrical|electronics|\basic\b|fpga|rf\b|digital design|analog|verification|chemist|biolog|clinical|regulatory|policy|tax|audit|payroll|pilot|nurs|phd|ph\.d|mba)\b/i
-const ME_BODY = /\b(mechanical|mechatronics|solidworks|catia|siemens nx|creo|autocad|ansys|gd&t|finite element|fea\b|cfd\b|machining|cnc|3d print|additive manufacturing|dfm|thermodynamics|heat transfer|fluid mechanics)\b/i
+const ME_BODY = /\b(mechanical|mechatronics|solidworks|catia|siemens nx|creo|autocad|ansys|gd&t|finite element|fea\b|cfd\b|machining|cnc|3d print|additive manufacturing|dfm|thermodynamics|heat transfer|fluid mechanics|aerodynamics?|composites?|carbon fib(re|er)|vehicle dynamics|suspension (design|geometry|kinematics)|wind tunnel|lap sim(ulation)?|formula student|fsae|formula sae|cae\b)\b/i
 
 export interface FilterVerdict { keep: boolean; region: Region; reason: string }
 
@@ -180,7 +182,9 @@ export function checkJob(j: RawJob): FilterVerdict & { needBody?: boolean } {
   // employer hires in North America, so those are kept and the location is pinned down from the posting later.
   const raw = regionOf(j.location)
   const vague = raw === 'unknown'
-  if (raw === 'other' || (vague && !j.big)) return { keep: false, region: 'other', reason: 'outside Canada, the USA and the UK, or location unclear' }
+  // F1 teams recruit in Italy, Switzerland and France; those stay in, as region 'other'.
+  const f1Abroad = raw === 'other' && MOTORSPORT.has(j.company) && /italy|switzerland|france|maranello|faenza|hinwil|ch[aâ]tillon/i.test(j.location)
+  if ((raw === 'other' && !f1Abroad) || (vague && !j.big)) return { keep: false, region: 'other', reason: 'outside Canada, the USA and the UK, or location unclear' }
   if (raw === 'uk' && !ukAllowed(j.company)) return { keep: false, region: 'uk', reason: 'UK job at a lesser-known employer' }
   const region: Region = vague ? 'usa' : raw
   if (region !== 'ontario' && !j.big) return { keep: false, region, reason: 'not a large employer outside Ontario' }
@@ -192,13 +196,14 @@ export function checkJob(j: RawJob): FilterVerdict & { needBody?: boolean } {
   if (/\b(phd|ph\.d\.?|doctoral|mba)\b/i.test(title)) return { keep: false, region, reason: 'graduate-degree role' }
   const mechInTitle = /\b(mechanical|mechatronics?)\b/i.test(title)
   if (!mechInTitle && OFF_TITLE.test(title)) return { keep: false, region, reason: 'different discipline' }
-  const tp = termProblem(title, '')
+  const tp = termProblem(title, '', j.company)
   if (tp) return { keep: false, region, reason: tp }
   // The U.S.-person and term-length rules need the posting text, so a posting without it is always read first.
-  if (j.description) { const why = textProblem(title, j.description, region); if (why) return { keep: false, region, reason: why } }
+  if (j.description) { const why = textProblem(title, j.description, region, j.company); if (why) return { keep: false, region, reason: why } }
   const needLoc = (vague && j.source === 'workday') || !j.description
   if (mechInTitle) return { keep: true, region, reason: 'mechanical internship', needBody: needLoc || undefined }
-  if (!ME_TITLE.test(title)) return { keep: false, region, reason: 'title is not engineering' }
+  // F1 teams title placements plainly ("Industrial Placement"), so their description decides instead.
+  if (!ME_TITLE.test(title) && !MOTORSPORT.has(j.company)) return { keep: false, region, reason: 'title is not engineering' }
   // Engineering-flavoured title without "mechanical": needs the description to mention ME work.
   if (!j.description) return { keep: true, region, reason: 'needs description check', needBody: true }
   // A LinkedIn alert carries no posting text (LinkedIn is never opened), so an engineering title is enough there.

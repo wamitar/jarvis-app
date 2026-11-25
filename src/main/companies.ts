@@ -23,8 +23,15 @@ export const KNOWN = new Set([
   'General Dynamics', 'BAE Systems', 'Leonardo', 'MBDA',
   // Major UK engineering employers (added 2026-11-23, so their UK internships and placements are kept)
   'Jaguar Land Rover', 'Dyson', 'McLaren', 'Mercedes-AMG Petronas F1', 'Red Bull Racing', 'Williams Racing', 'Aston Martin',
+  'Aston Martin F1', 'Alpine F1', 'Haas F1 Team', 'Cadillac F1', 'Ferrari', 'Racing Bulls', 'Audi F1 (Sauber)',
   'Bentley Motors', 'JCB', 'Arup', 'Mott MacDonald', 'Atkins', 'AECOM', 'Babcock', 'QinetiQ', 'Ricardo', 'Renishaw',
   'Siemens', 'National Grid', 'Network Rail', 'EDF', 'Sellafield', 'Unilever', 'GSK', 'AstraZeneca', 'Arm', 'Nissan', 'Ocado'
+])
+
+/** F1 teams; filter.ts gives them 12-month placements and their Italian/Swiss/French jobs. */
+export const MOTORSPORT = new Set([
+  'Mercedes-AMG Petronas F1', 'Red Bull Racing', 'McLaren', 'Williams Racing', 'Aston Martin F1', 'Alpine F1', 'Haas F1 Team',
+  'Cadillac F1', 'Ferrari', 'Racing Bulls', 'Audi F1 (Sauber)'
 ])
 
 /**
@@ -140,5 +147,11 @@ export const BOARDS: Board[] = [
   b('Seaspan', 'oracle', 'hckz.fa.us2.oraclecloud.com|CX_1'), b('StandardAero', 'oracle', 'cva.fa.us1.oraclecloud.com|CX_3'),
   b('Enwave', 'bamboohr', 'enwave', false), b('Giatec', 'bamboohr', 'giatecscientific', false), b('Mission Control', 'bamboohr', 'mcss', false),
   b('Pleora', 'bamboohr', 'pleora', false), b('Profound Medical', 'bamboohr', 'profoundmedical', false), b('Ranovus', 'bamboohr', 'ranovus', false),
-  b('Syntronic', 'lever', 'syntronic', false), b('Telesat', 'lever', 'telesat')
+  b('Syntronic', 'lever', 'syntronic', false), b('Telesat', 'lever', 'telesat'),
+  // Formula 1 teams
+  { ...b('Red Bull Racing', 'oracle', 'iagtme.fa.ocs.oraclecloud.com|CX_2'), queries: ['intern', 'placement', 'student', 'undergraduate'] },
+  { ...b('Racing Bulls', 'smartrecruiters', 'RedBull'), countries: ['gb', 'it'], queries: ['intern', 'placement', 'student'], titleFilter: '^VCARB F1 Team' },
+  b('Cadillac F1', 'workable', 'cadillacf1team'),
+  { ...b('Ferrari', 'successfactors', 'jobs.ferrari.com'), defaultLocation: 'Maranello, Italy' },
+  b('Aston Martin F1', 'pinpoint', 'astonmartinf1')
 ]
