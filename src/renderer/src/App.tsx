@@ -60,7 +60,8 @@ export function App() {
   const manualTask = main.filter(t => MANUAL.test(t)).pop()
   const otherTask = main.filter(t => !MANUAL.test(t) && !/^Auto-appl/.test(t)).pop()
   const waiting = withClaude ? ` (waiting for ${ai()})` : ''
-  const active = jobs.filter(j => j.status !== 'hidden')
+  // Jobs badge: only jobs still waiting on you (not applied to or past that, not hidden).
+  const active = jobs.filter(j => ['new', 'saved', 'tailored'].includes(j.status))
   const tracked = jobs.filter(j => ['applied', 'interview', 'offer', 'rejected'].includes(j.status)).length
   const openJob = (id: string): void => { setSelected(id); setPage('jobs') }
   const nav: [PageId, string, string?][] = [['jobs', 'Jobs', String(active.length || '')], ['status', 'Status', activity.working ? '●' : ''], ['tracker', 'Tracker', String(tracked || '')], ['resume', 'Resume'], ['profile', 'Profile'], ['settings', 'Settings']]
