@@ -13,6 +13,8 @@ let onUsage: (u: Usage) => void = () => {}
 
 /** Running totals of calls and tokens (input includes cached prompt tokens), reported after every call. */
 export function setUsageListener(fn: (u: Usage) => void, start: Usage): void { onUsage = fn; usage = { ...start } }
+/** Sets the token and call counters back to zero (Settings › Reset token count). */
+export function resetUsage(): void { usage = { calls: 0, input: 0, output: 0 }; onUsage({ ...usage }) }
 
 export function findCli(): string | null {
   if (cliPath && existsSync(cliPath)) return cliPath

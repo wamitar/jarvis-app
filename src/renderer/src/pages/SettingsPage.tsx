@@ -39,6 +39,8 @@ export function SettingsPage({ state, reload, notify }: { state: AppState; reloa
   const [nb, setNb] = useState<Board>({ company: '', ats: 'greenhouse', id: '', big: false })
   const [busy, setBusy] = useState(false)
   const codex = s.aiProvider === 'codex'
+  const [confirmReset, setConfirmReset] = useState(false)
+  const resetTokens = async (): Promise<void> => { setConfirmReset(false); await window.api.resetUsage(); await reload(); notify('Token count reset to zero.') }
   const save = async (next: Settings, msg = 'Settings saved.'): Promise<void> => { setS(next); await window.api.saveSettings(next); await reload(); notify(msg) }
   const addBoard = (): void => {
     if (!nb.company.trim() || !nb.id.trim()) return notify('Enter the company name and its board id.', true)
@@ -176,6 +178,15 @@ export function SettingsPage({ state, reload, notify }: { state: AppState; reloa
         <div className="grid2">
           <label className="f"><span>App id</span><input value={s.adzunaAppId} onChange={e => setS({ ...s, adzunaAppId: e.target.value })} onBlur={() => save(s)} /></label>
           <label className="f"><span>App key</span><input value={s.adzunaAppKey} onChange={e => setS({ ...s, adzunaAppKey: e.target.value })} onBlur={() => save(s)} /></label>
+        </div>
+      </div>
+
+      <div className="card"><h3>Token count</h3>
+        <p className="muted" style={{ marginBottom: 10 }}>The tokens-used counter at the bottom left adds up every AI call since it was last reset ({(state.usage.input + state.usage.output).toLocaleString()} tokens, {state.usage.calls.toLocaleString()} calls so far). Resetting only sets the counter back to zero; it does not change your plan's limits.</p>
+        <div className="rowx">
+          {!confirmReset
+            ? <button className="btn" onClick={() => setConfirmReset(true)}>Reset token count</button>
+            : <><button className="btn primary" onClick={resetTokens}>Yes, reset to zero</button><button className="btn ghost" onClick={() => setConfirmReset(false)}>Cancel</button></>}
         </div>
       </div>
     </div>

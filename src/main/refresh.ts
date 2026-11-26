@@ -89,7 +89,7 @@ export async function refreshJobs(settings: Settings, progress: (p: RefreshProgr
   result.errors = errors
 
   // Postings read and turned down in the last two weeks are not read again (most of a refresh's time otherwise),
-  // unless the user asked to recheck them (Jobs › Recheck rejected, after changing what they want).
+  // unless the user asked to recheck them (Jobs › Recheck filtered-out jobs, after changing what they want).
   const REREAD_AFTER = 14 * 86400_000
   const now = Date.now()
   const rejected = Object.fromEntries(Object.entries(recheckRejected ? {} : db.kvGet<Record<string, number>>('rejectedPostings', {})).filter(([, at]) => now - at < REREAD_AFTER))

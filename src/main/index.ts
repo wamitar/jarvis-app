@@ -9,7 +9,7 @@ import type { AppState } from '../shared/api'
 import * as db from './db'
 import { resolveStored } from './sources/linkedin-resolve'
 import { loadCompanySizes } from './sources/company-size'
-import { aiFound, aiName, askJson, setProvider, setUsageListener } from './ai/claude'
+import { aiFound, aiName, askJson, resetUsage, setProvider, setUsageListener } from './ai/claude'
 import * as keychain from './keychain'
 import * as gmail from './mail/gmail'
 import { checkRejections } from './mail/rejections'
@@ -392,6 +392,7 @@ function handlers(): void {
   h('autoApply', autoApplyJobs, 'Auto-applying')
   h('getScheduledRun', () => db.kvGet('lastScheduledRun', null))
   // Clears every auto-apply mark (flagged / dry run / failed) except real applications, so those jobs can be tried again.
+  h('resetUsage', () => { db.kvSet('aiCalls', 0); resetUsage() })
   h('clearAllAutoApplyFlags', () => { const all = db.kvGet<Record<string, AutoApplyResult>>('autoApply', {}); for (const k of Object.keys(all)) if (all[k].outcome !== 'applied') delete all[k]; db.kvSet('autoApply', all) })
   // Answers the user typed for questions auto-apply could not answer: kept in the profile for every later form, and the
   // job's flag is cleared so the next run tries it again.

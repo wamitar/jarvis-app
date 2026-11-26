@@ -115,7 +115,7 @@ export function JobsPage({ state, jobs, selected, setSelected, reload, notify, b
             {!noScores && <button className="btn" onClick={score} disabled={busy || !unscored || !state.hasResume} title={state.hasResume ? `About ${Math.ceil(unscored / 15)} ${ai()} calls` : 'Add your resume first'}>
               {unscored ? `Score ${unscored} unscored ${unscored === 1 ? 'job' : 'jobs'} with ${ai()}` : 'All jobs scored'}</button>}
             <button className="btn" onClick={() => setConfirmAuto(true)} disabled={busy || !autoTargets.length || !state.hasResume} title="Tailors, fills and submits every job under the current filters">Auto-apply to {autoTargets.length} {autoTargets.length === 1 ? 'job' : 'jobs'}</button>
-            <button className="btn" onClick={() => refresh(true)} disabled={busy} title="Gets jobs and also re-reads postings turned down in the last two weeks, against your current profile and rules. Slower than Get jobs.">Recheck rejected</button>
+            <button className="btn" onClick={() => refresh(true)} disabled={busy} title="Gets jobs and also re-reads postings turned down in the last two weeks, against your current profile and rules. Slower than Get jobs.">Recheck filtered-out jobs</button>
             <button className="btn primary" onClick={() => refresh()} disabled={busy}>{busy && <span className="spin" />}{busy ? 'Working…' : 'Get jobs'}</button>
           </div>
         </div>
