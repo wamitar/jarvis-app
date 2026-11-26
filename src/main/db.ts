@@ -99,6 +99,28 @@ export function pruneJobs(allowed: (r: StoredRow) => boolean): number {
 }
 export function clearScores(): void { db.exec('UPDATE jobs SET score = NULL') }
 
+/**
+ * Hides a job whose posting has closed (kept, not deleted, so a later refresh does not add it back). Only jobs still
+ * waiting on you (new, saved, tailored) are touched; applied and later stages are left alone. Returns true when hidden.
+ */
+export function hideClosed(id: string, why: string): boolean {
+  const r = db.prepare("SELECT notes FROM jobs WHERE id = ? AND status IN ('new', 'saved', 'tailored')").get(id) as { notes: string | null } | undefined
+  if (!r) return false
+  const note = `Posting closed ${new Date().toLocaleDateString()}: ${why}`
+  db.prepare("UPDATE jobs SET status = 'hidden', notes = ? WHERE id = ?").run(r.notes ? `${r.notes}\n${note}` : note, id)
+  return true
+}
+
+/**
+ * Hides LinkedIn-alert jobs that never turned up on the employer's site and whose alert is older than `cutoffIso`:
+ * internship postings that old are almost always closed. Tailored jobs are left for you to decide. Returns the count.
+ */
+export function hideStaleLinkedIn(cutoffIso: string): number {
+  const rows = db.prepare("SELECT id FROM jobs WHERE source = 'linkedin' AND status IN ('new', 'saved') AND COALESCE(apply_url, url) LIKE '%linkedin.com%' AND posted_at < ?").all(cutoffIso) as { id: string }[]
+  for (const r of rows) hideClosed(r.id, 'LinkedIn alert older than 30 days, never found on the employer\'s site')
+  return rows.length
+}
+
 export function getTailored(jobId: string): Tailored | null {
   const r = db.prepare('SELECT * FROM tailored WHERE job_id = ?').get(jobId) as any
   if (!r) return null

@@ -154,6 +154,9 @@ Reply with JSON only: {"url": "<link or null>", "foundTitle": "<the title as the
   return verifyPosting(String(reply.url).trim(), job)
 }
 
+/** True when a lookup's reason says the posting is closed (the employer page or the AI's search said so). */
+export const saysClosed = (why: string): boolean => /\bclosed\b|expired|no longer (available|accepting|open)|filled/i.test(why) && !/\/\s*closed\s*\//i.test(why) // not the prompt's "a / closed / b" echoed back
+
 export interface LookupRecord { url: string | null; why: string; at: number }
 const KEY = 'linkedinEmployer'
 export const lookups = (): Record<string, LookupRecord> => db.kvGet<Record<string, LookupRecord>>(KEY, {})
@@ -175,7 +178,10 @@ export async function resolveStored(jobId: string, retryAfter = 3 * 86400_000): 
   const r = await findEmployerPosting({ title: job.title, company: job.company, location: job.location })
   const rec: LookupRecord = typeof r === 'string' ? { url: null, why: r, at: Date.now() } : { url: r.url, why: '', at: Date.now() }
   db.kvSet(KEY, { ...lookups(), [jobId]: rec })
-  if (typeof r === 'string') return false
+  if (typeof r === 'string') {
+    if (saysClosed(r)) db.hideClosed(jobId, r)
+    return false
+  }
   db.setApplyUrl(jobId, r.url)
   if (r.description) db.setDescription(jobId, `${r.description}\n\n(Found on ${job.company}'s own site from your LinkedIn alert: ${r.url})`)
   return true

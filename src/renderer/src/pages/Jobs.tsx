@@ -87,7 +87,7 @@ export function JobsPage({ state, jobs, selected, setSelected, reload, notify, b
     try {
       const r = await window.api.refresh(recheckRejected)
       await reload()
-      setSummary(`Checked ${r.fetched.toLocaleString()} postings. ${r.passed} matched your rules and ${r.added} ${r.added === 1 ? 'is' : 'are'} new.${r.removed ? ` ${r.removed} older ${r.removed === 1 ? 'job was' : 'jobs were'} removed because ${r.removed === 1 ? 'it no longer fits' : 'they no longer fit'} your rules (location, U.S. persons only, or term length).` : ''} Nothing was sent to ${ai()}: press Score when you want match scores.`)
+      setSummary(`Checked ${r.fetched.toLocaleString()} postings. ${r.passed} matched your rules and ${r.added} ${r.added === 1 ? 'is' : 'are'} new.${r.removed ? ` ${r.removed} older ${r.removed === 1 ? 'job was' : 'jobs were'} removed because ${r.removed === 1 ? 'it no longer fits' : 'they no longer fit'} your rules (location, U.S. persons only, or term length).` : ''}${r.closed ? ` ${r.closed} closed ${r.closed === 1 ? 'posting was' : 'postings were'} hidden.` : ''} Nothing was sent to ${ai()}: press Score when you want match scores.`)
       setErrors(r.errors)
     } catch (e) { notify(errText(e), true) }
   }

@@ -5,8 +5,9 @@ import { checkJob, isInternTitle, regionOf, setRulesFromProfile, textProblem, uk
 import { allBoards, fetchAll, fetchDetail, setDiscoveredBoards } from './sources'
 import { canonicalCompany, discoverBoards, isBigEmployer } from './sources/simplify'
 import { classifyCompanies, loadCompanySizes } from './sources/company-size'
-import { fetchLinkedInAlerts } from './mail/linkedin-alerts'
+import { fetchLinkedInAlerts, MAX_ALERT_AGE_DAYS } from './mail/linkedin-alerts'
 import { resolvePending } from './sources/linkedin-resolve'
+import { recheckOpenJobs } from './sources/recheck'
 import * as gmail from './mail/gmail'
 import { pool, withTimeout } from './sources/util'
 import { aiFound, aiName } from './ai/claude'
@@ -27,7 +28,7 @@ export async function scorePending(settings: Settings, progress: (p: RefreshProg
 }
 
 export async function refreshJobs(settings: Settings, progress: (p: RefreshProgress) => void, recheckRejected = false): Promise<RefreshResult> {
-  const result: RefreshResult = { fetched: 0, passed: 0, added: 0, scored: 0, removed: 0, errors: [] }
+  const result: RefreshResult = { fetched: 0, passed: 0, added: 0, scored: 0, removed: 0, closed: 0, errors: [] }
   setRulesFromProfile({ ...emptyProfile(), ...db.kvGet('profile', emptyProfile()) })
   loadCompanySizes()
   setDiscoveredBoards(db.kvGet<Board[]>('discoveredBoards', []))
@@ -128,6 +129,12 @@ export async function refreshJobs(settings: Settings, progress: (p: RefreshProgr
       await resolvePending(40, (d, n) => progress({ stage: 'Fetching', detail: 'LinkedIn jobs on employer sites', done: d, total: n }), isStopping)
     } catch (e) { result.errors.push(`LinkedIn jobs on employer sites: ${(e as Error).message.slice(0, 160)}`) }
   }
+
+  // Closed postings leave the list: LinkedIn alerts too old to still be open, and stored jobs whose posting now says closed.
+  result.closed = db.hideStaleLinkedIn(new Date(Date.now() - MAX_ALERT_AGE_DAYS * 86400_000).toISOString())
+  try {
+    result.closed += await recheckOpenJobs(80, isStopping, (d, n) => progress({ stage: 'Fetching', detail: 'Checking saved jobs are still open', done: d, total: n }))
+  } catch (e) { result.errors.push(`Checking jobs are still open: ${(e as Error).message.slice(0, 160)}`) }
 
   result.removed = db.pruneJobs(r => (r.region !== 'usa' || (usAllowed(r.company, r.location) && !US_DEFENSE.has(r.company))) && (r.region !== 'uk' || ukAllowed(r.company)) && !(r.description && textProblem(r.title, r.description, r.region, r.company)))
 

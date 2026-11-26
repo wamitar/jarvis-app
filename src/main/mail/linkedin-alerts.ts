@@ -67,7 +67,13 @@ export function parseAlert(text: string): AlertJob[] {
 
 const titleKey = (s: string): string => s.toLowerCase().replace(/\([^)]*\)/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim()
 
-const JOB_SENDERS = 'jobalerts-noreply@linkedin.com OR jobs-noreply@linkedin.com OR jobs-listings@linkedin.com'
+/**
+ * Alert emails older than this are never read. LinkedIn is never opened, so an alert job cannot be checked for being
+ * closed until it is found on the employer's site; internship postings rarely stay open longer than this.
+ */
+export const MAX_ALERT_AGE_DAYS = 30
+
+const JOB_SENDERS ='jobalerts-noreply@linkedin.com OR jobs-noreply@linkedin.com OR jobs-listings@linkedin.com'
 // messages-noreply / notifications-noreply mostly carry chat and social mail: only their job digests are read.
 const DIGEST_SENDERS = 'messages-noreply@linkedin.com OR notifications-noreply@linkedin.com'
 
@@ -90,7 +96,9 @@ export interface AlertOptions { seen?: Set<string>; stop?: () => boolean; budget
  * Mails run newest first; ids in `opts.seen` are not fetched again.
  */
 export async function fetchLinkedInAlerts(have: { company: string; title: string }[], since: number | null, opts: AlertOptions = {}): Promise<AlertRead> {
-  const after = since == null ? '' : ` after:${Math.floor(since / 1000)}`
+  // Never older than MAX_ALERT_AGE_DAYS, even on the first (backfill) read: old alerts are mostly closed postings.
+  const floor = Date.now() - MAX_ALERT_AGE_DAYS * 86400_000
+  const after = ` after:${Math.floor(Math.max(since ?? 0, floor) / 1000)}`
   const q = `(from:(${JOB_SENDERS}) OR (from:(${DIGEST_SENDERS}) (hiring OR "jobs/view" OR "new jobs")))${after}`
   const cap = opts.cap ?? 3000
   const all = await searchAllIds(q, cap + 1)
@@ -110,6 +118,7 @@ export async function fetchLinkedInAlerts(have: { company: string; title: string
     }
     await new Promise(r => setTimeout(r, opts.pauseMs ?? 120))
     res.mails++; res.processed.push(id); opts.progress?.(res.processed.length, ids.length)
+    if (mail.at && mail.at < floor) continue // Gmail's after: is by day; drop anything that slipped past it
     let cards: AlertJob[] = []
     try { // one malformed mail is skipped (still counted as read), never fails the whole read
       cards = parseAlert(mail.text)

@@ -105,7 +105,7 @@ export interface Tailored {
 }
 
 export interface RefreshProgress { stage: string; detail: string; done: number; total: number }
-export interface RefreshResult { fetched: number; passed: number; added: number; scored: number; removed: number; errors: string[] }
+export interface RefreshResult { fetched: number; passed: number; added: number; scored: number; removed: number; closed: number; errors: string[] }
 
 export interface PrefillResult {
   page: string          // which page of the application this describes
