@@ -99,6 +99,46 @@ export function pruneJobs(allowed: (r: StoredRow) => boolean): number {
 }
 export function clearScores(): void { db.exec('UPDATE jobs SET score = NULL') }
 
+const postingKey = (u: string | null | undefined): string => (u || '').trim().replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase()
+
+/** Another stored job (not `exceptId`) whose application link is the same posting, or null. */
+export function otherWithPosting(url: string, exceptId: string): { id: string; status: string; company: string; title: string } | null {
+  const key = postingKey(url)
+  if (!key || /linkedin\.com/.test(key)) return null
+  const rows = db.prepare('SELECT id, status, company, title, apply_url FROM jobs WHERE id != ?').all(exceptId) as { id: string; status: string; company: string; title: string; apply_url: string }[]
+  return rows.find(r => postingKey(r.apply_url) === key) || null
+}
+
+/** Hides a job that is a second copy of a posting already in the list (so it is never applied to twice). */
+export function hideDuplicate(id: string, of: { company: string; title: string; status: string }): boolean {
+  const r = db.prepare("SELECT notes FROM jobs WHERE id = ? AND status IN ('new', 'saved', 'tailored')").get(id) as { notes: string | null } | undefined
+  if (!r) return false
+  const note = `Duplicate of ${of.company} - ${of.title} (${of.status}), same posting: hidden ${new Date().toLocaleDateString()}`
+  db.prepare("UPDATE jobs SET status = 'hidden', notes = ? WHERE id = ?").run(r.notes ? `${r.notes}\n${note}` : note, id)
+  return true
+}
+
+/**
+ * Drops jobs that would apply to a posting twice: one already applied to, hidden or rejected under another entry, or
+ * repeated within `ids`. The dropped ones are hidden as duplicates. Returns the ids that are safe to apply to.
+ */
+export function withoutDuplicatePostings(ids: string[]): string[] {
+  const all = db.prepare('SELECT id, status, company, title, apply_url FROM jobs').all() as { id: string; status: string; company: string; title: string; apply_url: string }[]
+  const byId = new Map(all.map(r => [r.id, r]))
+  const wanted = new Set(ids)
+  const taken = new Map<string, { company: string; title: string; status: string }>()
+  for (const r of all) { const k = postingKey(r.apply_url); if (k && !wanted.has(r.id) && !['new', 'saved', 'tailored'].includes(r.status)) taken.set(k, r) }
+  const out: string[] = []
+  for (const id of ids) {
+    const r = byId.get(id); const k = postingKey(r?.apply_url)
+    if (!r || !k || /linkedin\.com/.test(k)) { out.push(id); continue }
+    const prev = taken.get(k)
+    if (prev) { hideDuplicate(id, prev); continue }
+    taken.set(k, r); out.push(id)
+  }
+  return out
+}
+
 /**
  * Hides a job whose posting has closed (kept, not deleted, so a later refresh does not add it back). Only jobs still
  * waiting on you (new, saved, tailored) are touched; applied and later stages are left alone. Returns true when hidden.

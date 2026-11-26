@@ -352,7 +352,7 @@ function handlers(): void {
   }, 'Filling an application')
   h('getLiveRun', () => liveRun())
   h('skipAutoApply', (jobId: string) => skipCurrent(jobId))
-  autoApplyJobs = (jobIds: string[]) => exclusive(() => { startLive(jobIds); return runAutoApply(jobIds, {
+  autoApplyJobs = (ids: string[]) => exclusive(() => { const jobIds = db.withoutDuplicatePostings(ids); startLive(jobIds); return runAutoApply(jobIds, {
     profileDir: join(app.getPath('userData'), 'apply-browser'),
     shotDir: join(app.getPath('userData'), 'autoapply'),
     hidden: settings().autoApplyWindow !== 'minimized',

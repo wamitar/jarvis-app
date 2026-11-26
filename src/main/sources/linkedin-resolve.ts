@@ -178,6 +178,8 @@ export async function resolveStored(jobId: string, retryAfter = 3 * 86400_000): 
   const r = await findEmployerPosting({ title: job.title, company: job.company, location: job.location })
   const rec: LookupRecord = typeof r === 'string' ? { url: null, why: r, at: Date.now() } : { url: r.url, why: '', at: Date.now() }
   db.kvSet(KEY, { ...lookups(), [jobId]: rec })
+  // The employer's posting may already be in the list (read from its careers site, or another alert for the same job).
+  if (typeof r !== 'string') { const dup = db.otherWithPosting(r.url, jobId); if (dup) { db.hideDuplicate(jobId, dup); return false } }
   if (typeof r === 'string') {
     if (saysClosed(r)) db.hideClosed(jobId, r)
     return false
