@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs (or removes) the LaunchAgent that starts J.A.R.V.I.S.'s scheduled run at 9:00 and 21:00 every day.
+# Installs (or removes) the LaunchAgent that starts J.A.R.V.I.S.'s scheduled run at 21:00 every day.
 #   sh scripts/schedule.sh            install / update (uses the packaged app in release/)
 #   sh scripts/schedule.sh remove     uninstall
 #   sh scripts/schedule.sh now        start a scheduled run right away (same as launchd does)
@@ -35,7 +35,6 @@ cat > "$PLIST" <<EOF
   </array>
   <key>StartCalendarInterval</key>
   <array>
-    <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
     <dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
   </array>
   <key>StandardOutPath</key><string>/tmp/$LABEL.log</string>
@@ -45,4 +44,4 @@ cat > "$PLIST" <<EOF
 EOF
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
-echo "Installed $LABEL: runs $APP at 9:00 and 21:00."
+echo "Installed $LABEL: runs $APP at 21:00."

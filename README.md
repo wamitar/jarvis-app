@@ -29,7 +29,7 @@ It uses the Claude Code sign-in on this Mac, so there is no API key and no extra
 
 ## Scheduled runs (unattended)
 
-`sh scripts/schedule.sh` installs a LaunchAgent (`local.jarvis.pipeline`) that starts the packaged app with `--scheduled-run` at 9:00 and 21:00. Each run gets jobs, scores them, then auto-applies to every open job that has no auto-apply mark yet (jobs flagged before are left for you; no daily limit). If the app is open, that copy does the run; otherwise it starts without a window and quits afterwards. The Stop switch stops it. The result shows on the Status page and in `scheduled-runs.log` in the data folder. `sh scripts/schedule.sh now` starts a run at once; `sh scripts/schedule.sh remove` uninstalls it.
+`sh scripts/schedule.sh` installs a LaunchAgent (`local.jarvis.pipeline`) that starts the packaged app with `--scheduled-run` at 21:00 every day. Each run gets jobs, scores them, then auto-applies to every open job that has no auto-apply mark yet (jobs flagged before are left for you; no daily limit). If the app is open, that copy does the run; otherwise it starts without a window and quits afterwards. The Stop switch stops it. The result shows on the Status page and in `scheduled-runs.log` in the data folder. `sh scripts/schedule.sh now` starts a run at once; `sh scripts/schedule.sh remove` uninstalls it.
 
 ## Limits
 
