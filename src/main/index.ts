@@ -1,4 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, nativeTheme, Notification } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell, nativeImage, nativeTheme, Notification } from 'electron'
+import iconLight from '../../resources/icon-light.png?asset'
+import iconDark from '../../resources/icon-dark.png?asset'
 import { join } from 'node:path'
 import { rm } from 'node:fs/promises'
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
@@ -93,6 +95,11 @@ const gmailStore: gmail.GmailStore = {
 }
 const workdayLogin = (): WorkdayLogin => ({ email: db.kvGet('workdayEmail', ''), hasPassword: db.kvGet('workdayHasPassword', false) })
 function needJob(id: string): Job { const j = db.getJob(id); if (!j) throw new Error('That job is no longer in the list.'); return j }
+
+/** Dock icon follows the system theme: the cream robot in light mode, the charcoal one in dark mode. */
+function syncDockIcon(): void {
+  try { app.dock?.setIcon(nativeImage.createFromPath(nativeTheme.shouldUseDarkColors ? iconDark : iconLight)) } catch { /* cosmetic only */ }
+}
 
 function createWindow(): void {
   win = new BrowserWindow({
@@ -453,6 +460,8 @@ else app.on('second-instance', (_e, argv) => {
 })
 
 app.whenReady().then(() => {
+  syncDockIcon()
+  nativeTheme.on('updated', syncDockIcon)
   db.openDb(join(app.getPath('userData'), 'internship-hunter.db'))
   gmail.useStore(gmailStore)
   loadCompanySizes()   // AI-judged large employers, for the filter (Add a job by link, pruning)
