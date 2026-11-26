@@ -1,4 +1,5 @@
 import { ai, setAi } from './ai'
+import logo from './assets/logo.svg'
 import { useCallback, useEffect, useState } from 'react'
 import type { AppState } from '../../shared/api'
 import type { Activity, Job, LiveRun, RefreshProgress, Usage } from '../../shared/types'
@@ -69,7 +70,7 @@ export function App() {
   return (
     <div className="app">
       <aside className="side">
-        <div className="brand"><i>J</i>J.A.R.V.I.S.</div>
+        <div className="brand"><img src={logo} alt="" />J.A.R.V.I.S.</div>
         <nav className="nav">
           {nav.map(([id, label, count]) => (
             <button key={id} className={page === id ? 'on' : ''} onClick={() => setPage(id)}>{label}<span className="count">{count}</span></button>

@@ -1,4 +1,5 @@
 import { ai } from '../ai'
+import { isBigTech } from '../../../shared/bigtech'
 import { AnswerQuestions } from '../components/AnswerQuestions'
 import { GuessNotes } from '../components/GuessNotes'
 import { useEffect, useMemo, useState, useRef } from 'react'
@@ -39,6 +40,7 @@ export function JobsPage({ state, jobs, selected, setSelected, reload, notify, b
   useEffect(() => { setAuto(state.autoApply || {}) }, [state.autoApply])
   useEffect(() => window.api.onAutoApply(r => setAuto(a => ({ ...a, [r.jobId]: r }))), [])
   const [minScore, setMinScore] = useState(0)
+  const [bigTech, setBigTech] = useState(false)
   const [noScores, setNoScoresState] = useState(readNoScores)
   const setNoScores = (on: boolean): void => { setNoScoresState(on); writeNoScores(on) }
   const [hideFlagged, setHideFlaggedState] = useState(readHideFlagged)
@@ -58,12 +60,13 @@ export function JobsPage({ state, jobs, selected, setSelected, reload, notify, b
     else if (show === 'open' && ['applied', 'interview', 'offer', 'rejected'].includes(j.status)) return false
     if (region !== 'all' && j.region !== region) return false
     if (site !== 'all' && siteOf(j) !== site) return false
+    if (bigTech && !isBigTech(j.company)) return false
     if (!noScores && minScore && (j.score ?? 0) < minScore) return false
     if (q && !`${j.title} ${j.company} ${j.location}`.toLowerCase().includes(q.toLowerCase())) return false
     return true
-  }).sort(noScores ? newest : () => 0), [jobs, q, region, site, show, minScore, noScores, hideFlagged, auto])
+  }).sort(noScores ? newest : () => 0), [jobs, q, region, site, show, minScore, noScores, hideFlagged, auto, bigTech])
   const current = jobs.find(j => j.id === selected) || null
-  const filtered = !!q || show !== 'open' || region !== 'all' || site !== 'all' || minScore !== 0
+  const filtered = !!q || show !== 'open' || region !== 'all' || site !== 'all' || minScore !== 0 || bigTech
   const flagCount = Object.values(auto).filter(r => r.outcome !== 'applied').length
   const clearFlags = async (): Promise<void> => {
     await window.api.clearAllAutoApplyFlags()
@@ -149,9 +152,10 @@ export function JobsPage({ state, jobs, selected, setSelected, reload, notify, b
               {[...Object.keys(SITE_LABEL), 'other'].filter(k => jobs.some(j => siteOf(j) === k)).map(k => <option key={k} value={k}>{SITE_LABEL[k] || 'Other sites'}</option>)}
             </select>
             {!noScores && <select value={minScore} onChange={e => setMinScore(Number(e.target.value))}><option value={0}>Any match</option><option value={50}>50+</option><option value={75}>75+</option></select>}
+            <label className="rowx small" title="Only Apple, Google, Amazon, Microsoft, Meta, NVIDIA, Tesla, SpaceX and other large tech companies"><input type="checkbox" style={{ width: 'auto' }} checked={bigTech} onChange={e => setBigTech(e.target.checked)} />Big Tech</label>
             <label className="rowx small" title={`Hides ${ai()}'s scores and lists the newest jobs first`}><input type="checkbox" style={{ width: 'auto' }} checked={noScores} onChange={e => setNoScores(e.target.checked)} />Ignore scores</label>
             {show !== 'flagged' && <label className="rowx small" title="Leaves jobs auto-apply flagged out of this list. They are still under Flagged by auto-apply."><input type="checkbox" style={{ width: 'auto' }} checked={hideFlagged} onChange={e => setHideFlagged(e.target.checked)} />Hide flagged</label>}
-            {filtered && <button className="btn ghost sm" onClick={() => { setQ(''); setShow('open'); setRegion('all'); setSite('all'); setMinScore(0) }} title="Back to every job you have not applied to">Clear filters</button>}
+            {filtered && <button className="btn ghost sm" onClick={() => { setQ(''); setShow('open'); setRegion('all'); setSite('all'); setMinScore(0); setBigTech(false) }} title="Back to every job you have not applied to">Clear filters</button>}
             {flagCount > 0 && <button className="btn ghost sm" onClick={clearFlags} title="Removes every auto-apply mark (flagged, failed, dry run) so those jobs can be auto-applied again. Real applications are kept.">Clear {flagCount} auto-apply {flagCount === 1 ? 'mark' : 'marks'}</button>}
           </div>
           {visible.length === 0 && <div className="empty"><h2>{jobs.length ? 'No jobs match these filters' : 'No jobs yet'}</h2><p>{jobs.length ? 'Loosen a filter above.' : 'Press Get jobs to search about ' + state.boards.length + ' company job boards. The first run takes a few minutes.'}</p></div>}

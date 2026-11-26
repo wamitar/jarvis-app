@@ -13,6 +13,7 @@ import { aiFound, aiName, askJson, resetUsage, setProvider, setUsageListener } f
 import * as keychain from './keychain'
 import * as gmail from './mail/gmail'
 import { checkRejections } from './mail/rejections'
+import { exportTracker } from './export'
 import { normalizeResume, pdfToText, structureResume } from './resume/parse'
 import { tailorResume, shortenResume, findInventions, bankOf } from './resume/tailor'
 import { getActivity, setActivityListener, stopAll, track, StoppedError } from './activity'
@@ -430,6 +431,13 @@ function handlers(): void {
   }, 'Connecting Gmail')
   let rejectionRun: Promise<unknown> | null = null   // single-flight: a second click or a return to the page joins the run in progress
   h('checkRejections', () => rejectionRun ||= checkRejections(settings().scoreModel).finally(() => { rejectionRun = null }), 'Checking email for rejections')
+  h('exportTracker', async (): Promise<{ path: string; rows: number } | null> => {
+    const pick = await dialog.showSaveDialog(win!, { title: 'Export tracker to Excel', defaultPath: join(app.getPath('documents'), `J.A.R.V.I.S Tracker ${new Date().toISOString().slice(0, 10)}.xlsx`), filters: [{ name: 'Excel', extensions: ['xlsx'] }] })
+    if (pick.canceled || !pick.filePath) return null
+    const rows = await exportTracker(db.listJobs(), pick.filePath)
+    shell.showItemInFolder(pick.filePath)
+    return { path: pick.filePath, rows }
+  })
   h('disconnectGmail', async (): Promise<{ email: string }> => { await gmail.disconnect(gmailStore); return { email: '' } })
   h('openExternal', (url: string) => { if (/^https?:\/\//.test(url)) return shell.openExternal(url) })
 }

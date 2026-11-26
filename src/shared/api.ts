@@ -42,7 +42,8 @@ export interface Api {
   clearAutoApplyFlag(jobId: string): Promise<void>
   saveAnswers(jobId: string, answers: SavedAnswer[]): Promise<void>   // keeps answers for every later form and clears the job's flag
   clearAllAutoApplyFlags(): Promise<void>
-  resetUsage(): Promise<void>                        // sets the tokens-used counter back to zero
+  resetUsage(): Promise<void>
+  exportTracker(): Promise<{ path: string; rows: number } | null>   // asks where to save, writes the tracker as .xlsx (null when cancelled)                        // sets the tokens-used counter back to zero
   showAutoApplyShot(jobId: string): Promise<void>
   checkRejections(): Promise<RejectionCheck>         // reads Gmail (read-only) for rejection emails and marks the matching tracked jobs Rejected
   onAutoApply(fn: (r: AutoApplyResult) => void): () => void
@@ -70,4 +71,4 @@ export interface RejectionCheck { searched: number; newEmails: number; rejection
 export interface ScheduledRun { startedAt: string; endedAt?: string; refresh?: { fetched: number; added: number; removed: number; errors: number }; scored?: number; targets?: number; applied?: number; flagged?: number; left?: number; error?: string; refreshError?: string; scoreError?: string; applyError?: string }
 
 export const CHANNELS = ['getState', 'importResume', 'chooseResumePdf', 'addDocuments', 'setDocumentKind', 'removeDocument', 'revealDocument', 'revealResumePdf', 'saveResume', 'saveProfile', 'saveSettings', 'listJobs', 'getJob', 'updateJob', 'refresh',
-  'score', 'rescore', 'setWorkdayLogin', 'clearWorkdayLogin', 'connectGmail', 'disconnectGmail', 'addJob', 'tailor', 'saveTailored', 'revealPdf', 'prefill', 'fillAgain', 'openExternal', 'getActivity', 'stopAll', 'autoApply', 'clearAutoApplyFlag', 'saveAnswers', 'clearAllAutoApplyFlags', 'getLiveRun', 'getScheduledRun', 'skipAutoApply', 'showAutoApplyShot', 'checkRejections', 'resetUsage'] as const
+  'score', 'rescore', 'setWorkdayLogin', 'clearWorkdayLogin', 'connectGmail', 'disconnectGmail', 'addJob', 'tailor', 'saveTailored', 'revealPdf', 'prefill', 'fillAgain', 'openExternal', 'getActivity', 'stopAll', 'autoApply', 'clearAutoApplyFlag', 'saveAnswers', 'clearAllAutoApplyFlags', 'getLiveRun', 'getScheduledRun', 'skipAutoApply', 'showAutoApplyShot', 'checkRejections', 'resetUsage', 'exportTracker'] as const

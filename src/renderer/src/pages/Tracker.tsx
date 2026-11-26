@@ -27,6 +27,12 @@ export function TrackerPage({ jobs, reload, openJob, gmailEmail }: { jobs: Job[]
   }
   // Coming back while a check is still running: the main process hands out the same run, so wait on it again.
   useEffect(() => { if (running) void check() }, [])
+  const [exporting, setExporting] = useState(false)
+  const exportXlsx = async (): Promise<void> => {
+    setExporting(true)
+    try { const r = await window.api.exportTracker(); if (r) setMsg({ text: `Exported ${r.rows} ${r.rows === 1 ? 'job' : 'jobs'} to ${r.path}`, stopped: true }) }
+    catch (e) { setMsg({ text: errText(e), stopped: false }) } finally { setExporting(false) }
+  }
   const summary = (r: RejectionCheck): string => {
     if (!r.rejections) return `Read ${r.searched} emails (${r.newEmails} new). No new rejection emails.`
     const parts = [`${r.marked.length} ${r.marked.length === 1 ? 'job' : 'jobs'} marked Rejected`]
@@ -42,6 +48,7 @@ export function TrackerPage({ jobs, reload, openJob, gmailEmail }: { jobs: Job[]
       <div className="head"><div><h1>Tracker</h1>
         <p className="num">{count('applied')} applied · {count('interview')} interviewing · {count('offer')} offers · {count('tailored')} ready to send</p></div>
         <div className="rowx">
+          <button className="btn" onClick={exportXlsx} disabled={exporting || !rows.length} title="Saves every tracked job as an Excel file: applied in yellow, rejected in red, interviews in green, offers in blue">{exporting && <span className="spin" />}Export to Excel</button>
           <button className="btn" onClick={check} disabled={checking || !gmailEmail} title={gmailEmail ? 'Reads your Gmail (read-only) for rejection emails. Emails already checked are skipped, so pressing it again only reads new mail.' : 'Connect Gmail in Settings to use this'}>{checking && <span className="spin" />}{checking ? 'Checking email…' : 'Check email for rejections'}</button>
           {!gmailEmail && <span className="muted small">Connect Gmail in Settings to use this</span>}
         </div></div>
